@@ -1,1 +1,0 @@
-DATABASE_URL='postgresql+asyncpg://postgres.iavhjergqaehyludpsvb:[Sanvicente2014%23]@aws-1-eu-west-1.pooler.supabase.com:6543/postgres'
