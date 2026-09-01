@@ -12,6 +12,7 @@ from aiogram.types import (
 from bot.config import config
 from bot.database.base import AsyncSessionLocal
 from bot.handlers import main_router
+from bot.services.scheduler import setup_scheduler
 
 # Configuración de logs
 logging.basicConfig(level=logging.INFO)
@@ -60,6 +61,10 @@ async def main():
     # Configurar menú de comandos y limpiar mensajes pendientes
     await set_bot_commands(bot)
     await bot.delete_webhook(drop_pending_updates=True)
+    
+    scheduler = setup_scheduler(bot)
+    scheduler.start()
+    logger.info("⏱️ Planificador de tareas en segundo plano iniciado.")
     
     logger.info("🎾 Bot de Pádel iniciado y escuchando...")
     await dp.start_polling(bot)
