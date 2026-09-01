@@ -109,3 +109,11 @@ def build_back_to_levels_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🔙 Volver a Niveles", callback_data="back_to_levels")
     return builder.as_markup()
+
+def build_address_keyboard() -> InlineKeyboardMarkup:
+    """Teclado para pedir la dirección con opción de omitir."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⏩ Omitir enlace (Añadir más tarde)", callback_data="skip_address")
+    builder.button(text="🔙 Volver a Ubicaciones", callback_data="back_to_location")
+    builder.adjust(1)
+    return builder.as_markup()

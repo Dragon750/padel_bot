@@ -10,7 +10,7 @@ def court_booking_status_kb() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 def match_card_kb(match_id: int, is_court_booked: bool, maps_url: str | None) -> InlineKeyboardMarkup:
-    """Botonera interactiva principal para la tarjeta en el chat de grupo"""
+    """Botonera interactiva principal para la tarjeta en el chat de grupo."""
     builder = InlineKeyboardBuilder()
     
     # Fila 1: Entrar a las parejas
@@ -25,12 +25,24 @@ def match_card_kb(match_id: int, is_court_booked: bool, maps_url: str | None) ->
     if not is_court_booked:
         builder.button(text="🎾 Ya tengo pista", callback_data=f"ihavecourt_{match_id}")
     
-    # Fila 4: Enlace a Maps y Opción de salida
-    if maps_url:
-        builder.button(text="📍 Ver Ubicación", url=maps_url)
+    # Fila 4: Enlace a Maps (CONDICIONAL) y Opción de salida
+    # Validamos que maps_url exista y no sea una cadena de texto vacía
+    has_valid_url = bool(maps_url and maps_url.strip())
+    
+    if has_valid_url:
+        builder.button(text="📍 Ver Ubicación", url=maps_url.strip())
+        
     builder.button(text="❌ Salirme", callback_data=f"leave_{match_id}")
     
-    builder.adjust(2, 2, 1 if not is_court_booked else 0, 2 if maps_url else 1)
+    # Calculamos cuántos botones van en cada fila de forma dinámica
+    row_sizes = [2, 2] # Filas 1 y 2
+    if not is_court_booked:
+        row_sizes.append(1) # Fila 3 (Ya tengo pista)
+        
+    # Fila final: 2 botones si hay mapa (Maps + Salir), o 1 botón si no lo hay (Solo Salir)
+    row_sizes.append(2 if has_valid_url else 1)
+    
+    builder.adjust(*row_sizes)
     return builder.as_markup()
 
 def score_consensus_kb(match_id: int) -> InlineKeyboardMarkup:

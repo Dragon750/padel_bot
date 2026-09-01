@@ -15,7 +15,8 @@ from bot.keyboards.builders import (
     build_minutes_keyboard,
     build_level_types_keyboard,
     build_back_to_levels_keyboard,      
-    build_back_to_locations_keyboard    
+    build_back_to_locations_keyboard,
+    build_address_keyboard   
 )
 
 from bot.keyboards.inline import court_booking_status_kb, match_card_kb
@@ -65,6 +66,78 @@ async def process_location(callback: CallbackQuery, state: FSMContext):
         )
     await callback.answer()
 
+# ==========================================
+# 2B. ENTRADA MANUAL DE PISTA Y OMITIR DIRECCIÓN
+# ==========================================
+@router.message(CreateMatchFSM.waiting_for_custom_location_name)
+async def process_custom_location_name(message: Message, state: FSMContext):
+    """Captura el nombre de la nueva pista y pide la dirección/URL (opcional)"""
+    await state.update_data(custom_loc_name=message.text.strip())
+    
+    await state.set_state(CreateMatchFSM.waiting_for_custom_location_address)
+    await message.answer(
+        "📍 Ahora escribe la <b>dirección aproximada o el enlace de Google Maps</b>:\n\n"
+        "<i>(Si no lo tienes a mano, pulsa en Omitir y tú o el administrador podréis añadirlo más adelante)</i>.",
+        reply_markup=build_address_keyboard()
+    )
+
+
+@router.callback_query(CreateMatchFSM.waiting_for_custom_location_address, F.data == "skip_address")
+async def skip_custom_location_address(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    """El usuario decide no introducir enlace de Maps"""
+    data = await state.get_data()
+    custom_loc_name = data["custom_loc_name"]
+    
+    # Creamos la pista con maps_url = None
+    new_loc = Location(
+        name=custom_loc_name,
+        maps_url=None, 
+        is_approved=False,
+        suggested_by=callback.from_user.id
+    )
+    session.add(new_loc)
+    await session.flush()
+    
+    await state.update_data(location_id=new_loc.id)
+    await state.set_state(CreateMatchFSM.waiting_for_date)
+    await session.commit()
+    
+    await callback.message.edit_text(
+        "✅ Pista guardada sin enlace (pendiente de moderación).\n\n"
+        "📅 <b>¿Qué día se jugará?</b>\n\n"
+        "Selecciona una de las siguientes fechas:",
+        reply_markup=build_dates_keyboard()
+    )
+    await callback.answer()
+
+
+@router.message(CreateMatchFSM.waiting_for_custom_location_address)
+async def process_custom_location_address(message: Message, state: FSMContext, session: AsyncSession):
+    """El usuario introduce el enlace o dirección por texto"""
+    custom_loc_address = message.text.strip()
+    data = await state.get_data()
+    custom_loc_name = data["custom_loc_name"]
+    
+    new_loc = Location(
+        name=custom_loc_name,
+        maps_url=custom_loc_address,
+        is_approved=False,
+        suggested_by=message.from_user.id
+    )
+    session.add(new_loc)
+    await session.flush()
+    
+    await state.update_data(location_id=new_loc.id)
+    await state.set_state(CreateMatchFSM.waiting_for_date)
+    await session.commit()
+    
+    await message.answer(
+        "✅ Pista guardada con enlace (pendiente de moderación).\n\n"
+        "📅 <b>¿Qué día se jugará?</b>\n\n"
+        "Selecciona una de las siguientes fechas:",
+        reply_markup=build_dates_keyboard()
+    )
+    
 # ==========================================
 # 3. SELECCIÓN DE FECHA
 # ==========================================
