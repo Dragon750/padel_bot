@@ -3,7 +3,11 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import BotCommand
+from aiogram.types import (
+    BotCommand, 
+    BotCommandScopeAllPrivateChats, 
+    BotCommandScopeAllGroupChats
+)
 
 from bot.config import config
 from bot.database.base import AsyncSessionLocal
@@ -14,14 +18,27 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 async def set_bot_commands(bot: Bot):
-    """Registra el menú de comandos en Telegram"""
-    commands = [
+    """Registra los menús de comandos separados por tipo de chat"""
+    
+    # 1. Comandos EXCLUSIVOS para el CHAT PRIVADO
+    private_commands = [
         BotCommand(command="start", description="Iniciar el bot y ver tu nivel"),
-        BotCommand(command="crear", description="Organizar una convocatoria pública"),
-        BotCommand(command="crear_privado", description="Registrar un partido privado/cerrado"),
+        BotCommand(command="crear_privado", description="Registrar un partido cerrado"),
         BotCommand(command="sugerir_ubicacion", description="Proponer una nueva pista")
     ]
-    await bot.set_my_commands(commands)
+    await bot.set_my_commands(
+        private_commands, 
+        scope=BotCommandScopeAllPrivateChats()
+    )
+
+    # 2. Comandos EXCLUSIVOS para GRUPOS (El pueblo)
+    group_commands = [
+        BotCommand(command="crear", description="Organizar una convocatoria pública")
+    ]
+    await bot.set_my_commands(
+        group_commands, 
+        scope=BotCommandScopeAllGroupChats()
+    )
 
 async def main():
     bot = Bot(

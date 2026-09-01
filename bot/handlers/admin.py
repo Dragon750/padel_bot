@@ -7,7 +7,7 @@ from bot.config import config
 
 router = Router()
 
-@router.message(Command("sugerir_ubicacion"))
+@router.message(Command("sugerir_ubicacion"), F.chat.type == "private")
 async def cmd_sugerir(message: Message):
     """Inicia la sugerencia. Por simplicidad, pedimos formato directo."""
     await message.answer(

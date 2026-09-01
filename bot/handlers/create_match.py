@@ -18,17 +18,18 @@ from bot.keyboards.builders import (
     build_back_to_levels_keyboard,      
     build_back_to_locations_keyboard,
     build_address_keyboard,
-    build_back_to_min_level_keyboard
+    build_back_to_min_level_keyboard,
+    build_court_status_keyboard
 )
 
-from bot.keyboards.inline import court_booking_status_kb, match_card_kb
+from bot.keyboards.inline import match_card_kb
 
 router = Router()
 
 # ==========================================
 # 1. INICIO DEL ASISTENTE (/crear)
 # ==========================================
-@router.message(Command("crear"))
+@router.message(Command("crear"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_crear_partido(message: Message, state: FSMContext, session: AsyncSession):
     await state.clear()
     
@@ -307,7 +308,7 @@ async def process_level_type(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             "✅ Nivel configurado.\n\n"
             "🎾 <b>¿Tienes ya la pista reservada en el club?</b>",
-            reply_markup=court_booking_status_kb() # Asumiendo que importaste esto de inline.py
+            reply_markup=build_court_status_keyboard()
         )
     await callback.answer()
 
@@ -374,7 +375,7 @@ async def process_custom_max_level(message: Message, state: FSMContext, bot: Bot
             message_id=prompt_message_id,
             text="✅ Nivel configurado correctamente.\n\n"
                  "🎾 <b>¿Tienes ya la pista reservada en el club?</b>",
-            reply_markup=court_booking_status_kb()
+            reply_markup=build_court_status_keyboard()
         )
     except ValueError:
         await bot.edit_message_text(
@@ -384,6 +385,34 @@ async def process_custom_max_level(message: Message, state: FSMContext, bot: Bot
                  "Vuelve a escribir el nivel <b>MÁXIMO</b> aceptado:",
             reply_markup=build_back_to_min_level_keyboard() # <--- AÑADIDO EL TECLADO PARA QUE NO SE QUEDE ATRAPADO
         )
+
+# ==========================================
+# ESTADO DE RESERVA DE PISTA (Sí/No)
+# ==========================================
+@router.callback_query(CreateMatchFSM.waiting_for_court_status, F.data.startswith("book_"))
+async def process_court_status(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Procesa si el usuario tiene pista y avanza o finaliza"""
+    has_court = (callback.data == "book_yes")
+    await state.update_data(is_court_booked=has_court)
+    
+    data = await state.get_data()
+    prompt_message_id = data.get("prompt_message_id")
+    
+    if has_court:
+        # Si la tiene, pedimos el número de pista
+        await state.set_state(CreateMatchFSM.waiting_for_court_number)
+        if prompt_message_id:
+            await bot.edit_message_text(
+                chat_id=callback.message.chat.id,
+                message_id=prompt_message_id,
+                text="🎾 Introduce el <b>número o nombre de la pista</b> (ej. <i>Pista 3</i> o <i>Pista de Cristal</i>):"
+            )
+    else:
+        # Si NO la tiene, marcamos None y publicamos directamente el partido
+        await state.update_data(court_number=None)
+        await finalize_match_creation(callback.message, state, callback.from_user.id, bot)
+        
+    await callback.answer()
 
 # ==========================================
 # ENTRADA DE NÚMERO DE PISTA Y PUBLICACIÓN

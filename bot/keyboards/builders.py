@@ -123,3 +123,15 @@ def build_back_to_min_level_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🔙 Volver a Nivel Mínimo", callback_data="back_to_min_level")
     return builder.as_markup()
+
+def build_court_status_keyboard() -> InlineKeyboardMarkup:
+    """Teclado para confirmar si la pista está reservada, con opción de volver."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Sí, ya está reservada", callback_data="book_yes")
+    builder.button(text="⏳ No, reservar al llenarse", callback_data="book_no")
+    
+    # Este callback_data conectará mágicamente con la función nav_back_to_levels que ya tienes
+    builder.button(text="🔙 Volver a Niveles", callback_data="back_to_levels") 
+    
+    builder.adjust(1) # Pone los botones uno debajo de otro
+    return builder.as_markup()

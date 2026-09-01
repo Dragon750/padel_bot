@@ -18,9 +18,9 @@ def build_level_keyboard() -> InlineKeyboardMarkup:
     builder.adjust(3)
     return builder.as_markup()
 
-@router.message(CommandStart())
+@router.message(CommandStart(), F.chat.type == "private")
 async def cmd_start(message: Message, session: AsyncSession):
-    """Comprueba si el usuario existe o le pide el nivel inicial"""
+    """Comprueba si el usuario existe o le pide el nivel inicial."""
     user_id = message.from_user.id
     stmt = select(User).where(User.telegram_id == user_id)
     result = await session.execute(stmt)
