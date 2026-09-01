@@ -3,6 +3,7 @@ from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
+from bot.handlers.match_card import render_match_card
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -433,7 +434,7 @@ async def process_court_number(message: Message, state: FSMContext, bot: Bot):
 
 
 async def finalize_match_creation(message: Message, state: FSMContext, user_id: int, bot: Bot):
-    """Inserta el partido, limpia estado y convierte el prompt en la Tarjeta Interactiva"""
+    """Inserta el partido y convierte el prompt en la Tarjeta Interactiva oficial"""
     data = await state.get_data()
     prompt_message_id = data.get("prompt_message_id")
     
@@ -447,41 +448,24 @@ async def finalize_match_creation(message: Message, state: FSMContext, user_id: 
             is_court_booked=data["is_court_booked"],
             court_number=data.get("court_number"),
             booked_by=user_id if data["is_court_booked"] else None,
-            status="OPEN"
+            status="OPEN",
+            # GUARDAMOS DÓNDE ESTÁ EL MENSAJE PARA PODER EDITARLO DESDE PRIVADO LUEGO
+            chat_id=message.chat.id, 
+            message_id=prompt_message_id 
         )
         session.add(new_match)
         await session.flush() 
         
-        creator_player = MatchPlayer(
-            match_id=new_match.id,
-            user_id=user_id,
-            team=1
-        )
+        creator_player = MatchPlayer(match_id=new_match.id, user_id=user_id, team=1)
         session.add(creator_player)
-        loc = await session.get(Location, new_match.location_id)
         await session.commit()
+        
+        # ¡Magia! Usamos la misma función para que salga perfecto
+        text, maps_url, is_booked = await render_match_card(new_match.id, session)
+        kb = match_card_kb(new_match.id, is_booked, maps_url)
         
     await state.clear()
     
-    court_info = f"🟢 Pista reservada ({new_match.court_number})" if new_match.is_court_booked else "🟡 Pista pendiente de reserva"
-    
-    text = (
-        f"🎾 <b>CONVOCATORIA PÁDEL #{new_match.id}</b>\n\n"
-        f"📍 <b>Lugar:</b> {loc.name}\n"
-        f"📅 <b>Fecha:</b> {new_match.datetime.strftime('%d/%m/%Y %H:%M')}\n"
-        f"📊 <b>Nivel:</b> {new_match.min_level:.1f} - {new_match.max_level:.1f}\n"
-        f"📌 <b>Estado:</b> {court_info}\n\n"
-        f"👥 <b>Pareja 1:</b>\n"
-        f"  1. 👤 Creador\n"
-        f"  2. [Libre]\n\n"
-        f"👥 <b>Pareja 2:</b>\n"
-        f"  1. [Libre]\n"
-        f"  2. [Libre]\n"
-    )
-    
-    kb = match_card_kb(new_match.id, new_match.is_court_booked, loc.maps_url if loc else None)
-    
-    # Transformamos definitivamente el mensaje inicial en la tarjeta pública
     if prompt_message_id:
         await bot.edit_message_text(
             chat_id=message.chat.id,
@@ -489,8 +473,6 @@ async def finalize_match_creation(message: Message, state: FSMContext, user_id: 
             text=text,
             reply_markup=kb
         )
-    else:
-        await message.answer(text, reply_markup=kb)
 
 
 # ==========================================

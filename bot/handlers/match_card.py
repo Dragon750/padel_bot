@@ -1,53 +1,407 @@
-from aiogram import Router, F
-from aiogram.types import CallbackQuery
+import logging
+from aiogram import Router, F, Bot
+from aiogram.types import CallbackQuery, Message
+from aiogram.fsm.context import FSMContext
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from bot.states.action_states import MatchActionFSM
+from bot.database.models import MatchWaitlist
+from sqlalchemy import select, asc, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from bot.database.models import Match, MatchPlayer
+
+from bot.database.models import Match, MatchPlayer, Location, User
+from bot.keyboards.inline import match_card_kb
 
 router = Router()
+logger = logging.getLogger(__name__)
+
+# ==========================================
+# FUNCIÓN DIBUJANTE: Reconstruye la tarjeta
+# ==========================================
+# ==========================================
+# FUNCIÓN DIBUJANTE: Reconstruye la tarjeta
+# ==========================================
+async def render_match_card(match_id: int, session: AsyncSession) -> tuple[str, str | None, bool]:
+    """Genera el texto actualizado de la tarjeta y devuelve parámetros para el teclado."""
+    
+    match = await session.get(Match, match_id)
+    loc = await session.get(Location, match.location_id)
+    
+    stmt = select(MatchPlayer, User).join(User).where(MatchPlayer.match_id == match_id).order_by(asc(MatchPlayer.joined_at))
+    result = await session.execute(stmt)
+    players_data = result.all()
+    
+    team_1, team_2 = [], []
+    for mp, user in players_data:
+        # 1. Privilegiar el @username, si no lo tiene, usamos el nombre completo
+        player_name = f"@{user.username}" if user.username else user.full_name
+        
+        # 2. Añadir la estrella si es el gestor
+        if user.telegram_id == match.manager_id:
+            player_name += " ⭐️"
+            
+        player_text = f"👤 {player_name} ({user.level:.1f})"
+            
+        if mp.team == 1:
+            team_1.append(player_text)
+        else:
+            team_2.append(player_text)
+
+    p1_slots = [team_1[i] if i < len(team_1) else "[Libre]" for i in range(2)]
+    p2_slots = [team_2[i] if i < len(team_2) else "[Libre]" for i in range(2)]
+    
+    court_info = f"🟢 Pista reservada ({match.court_number})" if match.is_court_booked else "🟡 Pendiente de reserva comunitaria"
+    
+    text = (
+        f"🎾 <b>CONVOCATORIA PÁDEL #{match.id}</b>\n\n"
+        f"📍 <b>Lugar:</b> {loc.name}\n"
+        f"📅 <b>Fecha:</b> {match.datetime.strftime('%d/%m/%Y %H:%M')}\n"
+        f"📊 <b>Nivel:</b> {match.min_level:.1f} - {match.max_level:.1f}\n"
+        f"📌 <b>Estado:</b> {court_info}\n\n"
+        f"👥 <b>Pareja 1:</b>\n"
+        f"  1. {p1_slots[0]}\n"
+        f"  2. {p1_slots[1]}\n\n"
+        f"👥 <b>Pareja 2:</b>\n"
+        f"  1. {p2_slots[0]}\n"
+        f"  2. {p2_slots[1]}\n"
+    )
+    
+    return text, loc.maps_url, match.is_court_booked
+
+# ==========================================
+# ACCIONES DE LOS BOTONES
+# ==========================================
 
 @router.callback_query(F.data.startswith("join_"))
-async def join_match(callback: CallbackQuery, session: AsyncSession):
-    """Inscribe al usuario en la Pareja 1 o 2 validando plazas."""
-    parts = callback.data.split("_")
-    match_id, team = int(parts[1]), int(parts[2])
+async def handle_join(callback: CallbackQuery, session: AsyncSession, bot: Bot):
+    """Permite a un usuario ocupar un hueco libre en Pareja 1 o Pareja 2."""
+    _, str_match_id, str_team = callback.data.split("_")
+    match_id, team = int(str_match_id), int(str_team)
     user_id = callback.from_user.id
+    
+    # Comprobar si el partido sigue abierto
+    match = await session.get(Match, match_id)
+    if match.status not in ["OPEN", "FULL"]:
+        await callback.answer("❌ Este partido ya no admite inscripciones.", show_alert=True)
+        return
 
-    # 1. Comprobar si ya está en el partido
-    stmt = select(MatchPlayer).where((MatchPlayer.match_id == match_id) & (MatchPlayer.user_id == user_id))
-    result = await session.execute(stmt)
-    if result.scalar_one_or_none():
+    # Comprobar si el usuario ya está dentro
+    stmt_exist = select(MatchPlayer).where(MatchPlayer.match_id == match_id, MatchPlayer.user_id == user_id)
+    if await session.scalar(stmt_exist):
         await callback.answer("⚠️ Ya estás inscrito en este partido.", show_alert=True)
         return
 
-    # 2. Contar ocupación del equipo
-    stmt_team = select(MatchPlayer).where((MatchPlayer.match_id == match_id) & (MatchPlayer.team == team))
-    team_players = list((await session.execute(stmt_team)).scalars().all())
+    # Comprobar si hay hueco en el equipo solicitado
+    stmt_count = select(MatchPlayer).where(MatchPlayer.match_id == match_id, MatchPlayer.team == team)
+    team_players = (await session.scalars(stmt_count)).all()
     
     if len(team_players) >= 2:
-        await callback.answer("⛔ Esta pareja ya está llena.", show_alert=True)
+        await callback.answer("❌ Esa pareja ya está llena. Intenta en la otra.", show_alert=True)
         return
 
-    # 3. Guardar plaza
-    new_player = MatchPlayer(match_id=match_id, user_id=user_id, team=team, registered_by=user_id)
+    # Inscribir al jugador
+    new_player = MatchPlayer(match_id=match_id, user_id=user_id, team=team)
     session.add(new_player)
+    
+    # Comprobar si el partido se ha llenado (4 jugadores en total)
+    stmt_total = select(MatchPlayer).where(MatchPlayer.match_id == match_id)
+    total_players = len((await session.scalars(stmt_total)).all()) + 1 # Sumamos 1 por el que acaba de entrar
+    
+    if total_players == 4:
+        match.status = "FULL"
+        # Si se llena y no hay pista, podríamos avisar al manager aquí.
+        
     await session.commit()
     
-    await callback.answer("✅ Te has apuntado al partido.")
-    # (Aquí iría la llamada a la función que reconstruye el texto de la tarjeta y hace edit_message_text[cite: 6])
+    # Actualizar la tarjeta visualmente
+    text, maps_url, is_booked = await render_match_card(match_id, session)
+    await callback.message.edit_text(text, reply_markup=match_card_kb(match_id, is_booked, maps_url))
+    await callback.answer("✅ ¡Te has unido al partido!")
 
 
+@router.callback_query(F.data.startswith("swap_"))
+async def handle_swap(callback: CallbackQuery, session: AsyncSession):
+    """Permite cambiar de Pareja 1 a Pareja 2 y viceversa si hay hueco."""
+    match_id = int(callback.data.split("_")[1])
+    user_id = callback.from_user.id
+    
+    # Buscar al jugador
+    stmt_player = select(MatchPlayer).where(MatchPlayer.match_id == match_id, MatchPlayer.user_id == user_id)
+    player = await session.scalar(stmt_player)
+    
+    if not player:
+        await callback.answer("❌ No estás inscrito en este partido.", show_alert=True)
+        return
+        
+    target_team = 2 if player.team == 1 else 1
+    
+    # Comprobar hueco en el otro equipo
+    stmt_count = select(MatchPlayer).where(MatchPlayer.match_id == match_id, MatchPlayer.team == target_team)
+    if len((await session.scalars(stmt_count)).all()) >= 2:
+        await callback.answer(f"❌ La Pareja {target_team} ya está llena.", show_alert=True)
+        return
+        
+    player.team = target_team
+    await session.commit()
+    
+    text, maps_url, is_booked = await render_match_card(match_id, session)
+    await callback.message.edit_text(text, reply_markup=match_card_kb(match_id, is_booked, maps_url))
+    await callback.answer("🔄 ¡Has cambiado de pareja!")
+
+
+@router.callback_query(F.data.startswith("leave_"))
+async def handle_leave(callback: CallbackQuery, session: AsyncSession, bot: Bot):
+    """Saca al jugador del partido y gestiona el relevo de manager si es necesario."""
+    match_id = int(callback.data.split("_")[1])
+    user_id = callback.from_user.id
+    
+    stmt_player = select(MatchPlayer).where(MatchPlayer.match_id == match_id, MatchPlayer.user_id == user_id)
+    player = await session.scalar(stmt_player)
+    
+    if not player:
+        await callback.answer("❌ No estás inscrito en este partido.", show_alert=True)
+        return
+        
+    match = await session.get(Match, match_id)
+    
+    # Borrar al jugador
+    await session.delete(player)
+    
+    # Si el partido estaba FULL, ahora vuelve a estar OPEN
+    if match.status == "FULL":
+        match.status = "OPEN"
+        
+    await session.flush() # Aplicamos el borrado sin cerrar la transacción aún
+    
+    # ¿Era el organizador? Traspasamos el liderazgo al jugador más antiguo
+    if match.manager_id == user_id:
+        stmt_oldest = select(MatchPlayer).where(MatchPlayer.match_id == match_id).order_by(asc(MatchPlayer.joined_at)).limit(1)
+        oldest_player = await session.scalar(stmt_oldest)
+        
+        if oldest_player:
+            match.manager_id = oldest_player.user_id
+            try:
+                await bot.send_message(
+                    oldest_player.user_id,
+                    f"👑 <b>ERES EL NUEVO ORGANIZADOR</b>\n"
+                    f"El creador del partido #{match.id} se ha dado de baja. Por ser el jugador más antiguo, "
+                    f"ahora eres tú el responsable de introducir el marcador final."
+                )
+            except Exception:
+                pass
+        else:
+            # Si no queda nadie en el partido, lo cancelamos automáticamente
+            match.status = "CANCELLED"
+            
+    await session.commit()
+    
+    if match.status == "CANCELLED":
+        await callback.message.edit_text(f"❌ Convocatoria #{match.id} cancelada (no quedan jugadores).")
+    else:
+        text, maps_url, is_booked = await render_match_card(match_id, session)
+        await callback.message.edit_text(text, reply_markup=match_card_kb(match_id, is_booked, maps_url))
+    if match.status != "CANCELLED":
+        # Despertar a los reservas!
+        await notify_waitlist(match_id, session, bot)
+ 
+    await callback.answer("👋 Te has salido del partido correctamente.")
+    
+    # ==========================================
+# RESERVA COLABORATIVA (CUALQUIER JUGADOR)
+# ==========================================
 @router.callback_query(F.data.startswith("ihavecourt_"))
-async def collaborative_booking(callback: CallbackQuery, session: AsyncSession):
-    """Reserva Colaborativa: Un jugador confirmado indica que ya reservó la pista física."""
+async def handle_i_have_court(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    """Activa el modo de escucha para que un jugador indique la pista reservada."""
     match_id = int(callback.data.split("_")[1])
     
-    # Se debe verificar que el usuario está dentro de MatchPlayer antes de permitirle reservar[cite: 4, 6]
+    # Verificamos si otro jugador se adelantó
     match = await session.get(Match, match_id)
-    if match and not match.is_court_booked:
-        match.is_court_booked = True
-        match.booked_by = callback.from_user.id
-        # Idealmente aquí pedirías el número de pista vía FSM, pero para simplificar lo cerramos atómicamente
+    if match.is_court_booked:
+        await callback.answer("✅ La pista ya ha sido confirmada por otro jugador.", show_alert=True)
+        return
+        
+    await state.update_data(collab_match_id=match_id)
+    await state.update_data(origin_chat_id=callback.message.chat.id)
+    await state.update_data(origin_msg_id=callback.message.message_id)
+    
+    await state.set_state(MatchActionFSM.waiting_for_collab_court)
+    
+    msg = await callback.message.answer(
+        f"🎾 <b>Reserva Colaborativa (Partido #{match_id})</b>\n\n"
+        "Escribe en este chat el <b>número o nombre de la pista</b> que has reservado (ej. <i>Pista 3</i>):"
+    )
+    await state.update_data(prompt_msg_id=msg.message_id)
+    await callback.answer()
+
+
+@router.message(MatchActionFSM.waiting_for_collab_court)
+async def process_collab_court(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    """Consume el número de pista, actualiza la tarjeta y notifica al resto."""
+    try:
+        await message.delete() # Borramos el texto del usuario para no ensuciar el grupo
+    except Exception:
+        pass
+        
+    data = await state.get_data()
+    match_id = data["collab_match_id"]
+    court_number = message.text.strip()
+    
+    # 1. Actualizamos la base de datos
+    match = await session.get(Match, match_id)
+    match.is_court_booked = True
+    match.court_number = court_number
+    match.booked_by = message.from_user.id
+    
+    # Obtenemos los otros jugadores para notificarles
+    stmt_others = select(MatchPlayer.user_id).where(
+        MatchPlayer.match_id == match_id,
+        MatchPlayer.user_id != message.from_user.id,
+        MatchPlayer.user_id.is_not(None)
+    )
+    other_players = (await session.scalars(stmt_others)).all()
+    
+    await session.commit()
+    
+    # 2. Actualizamos la tarjeta interactiva original
+    text, maps_url, is_booked = await render_match_card(match_id, session)
+    try:
+        await bot.edit_message_text(
+            chat_id=data["origin_chat_id"],
+            message_id=data["origin_msg_id"],
+            text=text,
+            reply_markup=match_card_kb(match_id, is_booked, maps_url)
+        )
+        # Borramos el mensaje donde le pedíamos la pista
+        await bot.delete_message(chat_id=message.chat.id, message_id=data["prompt_msg_id"])
+    except Exception:
+        pass
+        
+    await state.clear()
+    
+    # 3. Notificaciones cruzadas por privado
+    for user_id in other_players:
+        try:
+            await bot.send_message(
+                chat_id=user_id,
+                text=f"✅ <b>PISTA CONFIRMADA</b>\n\n"
+                     f"@{message.from_user.username or message.from_user.first_name} ha confirmado la reserva física para el partido #{match_id}.\n"
+                     f"📍 <b>Pista asignada:</b> {court_number}"
+            )
+        except Exception:
+            pass
+
+
+# ==========================================
+# LISTA DE ESPERA
+# ==========================================
+@router.callback_query(F.data.startswith("waitlist_"))
+async def handle_waitlist(callback: CallbackQuery, session: AsyncSession):
+    """Permite apuntarse a la cola de sustituciones."""
+    match_id = int(callback.data.split("_")[1])
+    user_id = callback.from_user.id
+    
+    # 1. ¿Ya está jugando?
+    stmt_playing = select(MatchPlayer).where(MatchPlayer.match_id == match_id, MatchPlayer.user_id == user_id)
+    if await session.scalar(stmt_playing):
+        await callback.answer("⚠️ Ya estás inscrito en este partido. No puedes estar en lista de espera.", show_alert=True)
+        return
+        
+    # 2. ¿Ya está en la lista de espera?
+    stmt_waiting = select(MatchWaitlist).where(MatchWaitlist.match_id == match_id, MatchWaitlist.user_id == user_id)
+    if await session.scalar(stmt_waiting):
+        await callback.answer("✅ Ya estabas en la lista de espera de este partido.", show_alert=True)
+        return
+        
+    # 3. Lo añadimos a la cola
+    new_waitlist = MatchWaitlist(match_id=match_id, user_id=user_id)
+    session.add(new_waitlist)
+    await session.commit()
+    
+    await callback.answer("⏳ Te has apuntado a la lista de espera. Te avisaremos automáticamente si queda un hueco libre.", show_alert=True)
+
+async def notify_waitlist(match_id: int, session: AsyncSession, bot: Bot):
+    """Lanza la alerta push a todos los usuarios en lista de espera."""
+    stmt = select(MatchWaitlist).where(MatchWaitlist.match_id == match_id)
+    waitlist_users = (await session.scalars(stmt)).all()
+    
+    if not waitlist_users:
+        return
+        
+    match = await session.get(Match, match_id)
+    loc = await session.get(Location, match.location_id)
+    match_time = match.datetime.strftime('%d/%m/%Y %H:%M')
+    
+    # Botón mágico para capturar la plaza desde el chat privado
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⚡ Ocupar Plaza Libre", callback_data=f"takeslot_{match_id}")
+    kb = builder.as_markup()
+    
+    for wl in waitlist_users:
+        try:
+            await bot.send_message(
+                chat_id=wl.user_id,
+                text=f"🚨 <b>¡PLAZA LIBRE DISPONIBLE!</b>\n\n"
+                     f"Se ha liberado un hueco para el partido en {loc.name} el {match_time}.\n\n"
+                     f"🏃‍♂️ <i>El primero en pulsar el botón se queda la plaza.</i>",
+                reply_markup=kb
+            )
+        except Exception:
+            pass # Ignorar si el usuario ha bloqueado al bot
+
+
+@router.callback_query(F.data.startswith("takeslot_"))
+async def handle_take_slot(callback: CallbackQuery, session: AsyncSession, bot: Bot):
+    """Gestiona la concurrencia: el primero que llega, se lo queda."""
+    match_id = int(callback.data.split("_")[1])
+    user_id = callback.from_user.id
+    
+    match = await session.get(Match, match_id)
+    
+    if match.status not in ["OPEN"]:
+        await callback.message.edit_text("❌ Llegaste tarde, la plaza ya ha sido ocupada.")
+        return
+        
+    # Doble validación atómica: Contamos jugadores reales
+    stmt_count = select(func.count()).select_from(MatchPlayer).where(MatchPlayer.match_id == match_id)
+    players_count = await session.scalar(stmt_count)
+    
+    if players_count >= 4:
+        match.status = "FULL"
         await session.commit()
-        await callback.answer("✅ Has confirmado la reserva de pista. Actualizando tarjeta...", show_alert=True)
-        # (Aquí se edita el mensaje eliminando el botón [🎾 Ya tengo pista][cite: 6])
+        await callback.message.edit_text("❌ Llegaste tarde, la plaza ya ha sido ocupada por otro jugador.")
+        return
+        
+    # Comprobar en qué equipo hay hueco
+    stmt_t1 = select(func.count()).select_from(MatchPlayer).where(MatchPlayer.match_id == match_id, MatchPlayer.team == 1)
+    t1_count = await session.scalar(stmt_t1)
+    team_to_join = 1 if t1_count < 2 else 2
+    
+    # ¡Adjudicado!
+    new_player = MatchPlayer(match_id=match_id, user_id=user_id, team=team_to_join)
+    session.add(new_player)
+    
+    # Lo borramos de la lista de espera
+    stmt_wl = select(MatchWaitlist).where(MatchWaitlist.match_id == match_id, MatchWaitlist.user_id == user_id)
+    wl_entry = await session.scalar(stmt_wl)
+    if wl_entry:
+        await session.delete(wl_entry)
+        
+    if players_count + 1 == 4:
+        match.status = "FULL"
+        
+    await session.commit()
+    
+    # 1. Editamos el mensaje privado de éxito
+    await callback.message.edit_text("✅ <b>¡Enhorabuena!</b> Has sido el más rápido y has ocupado la plaza libre.")
+    
+    # 2. Actualizamos la tarjeta grupal
+    if match.chat_id and match.message_id:
+        text, maps_url, is_booked = await render_match_card(match_id, session)
+        try:
+            await bot.edit_message_text(
+                chat_id=match.chat_id,
+                message_id=match.message_id,
+                text=text,
+                reply_markup=match_card_kb(match_id, is_booked, maps_url)
+            )
+        except Exception:
+            pass

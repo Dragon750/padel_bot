@@ -13,6 +13,7 @@ from bot.config import config
 from bot.database.base import AsyncSessionLocal
 from bot.handlers import main_router
 from bot.services.scheduler import setup_scheduler
+from bot.handlers import match_card
 
 # Configuración de logs
 logging.basicConfig(level=logging.INFO)
@@ -57,7 +58,8 @@ async def main():
 
     # Registrar el router principal con todos los módulos
     dp.include_router(main_router)
-
+    dp.include_router(match_card.router)
+    
     # Configurar menú de comandos y limpiar mensajes pendientes
     await set_bot_commands(bot)
     await bot.delete_webhook(drop_pending_updates=True)
@@ -65,7 +67,7 @@ async def main():
     scheduler = setup_scheduler(bot)
     scheduler.start()
     logger.info("⏱️ Planificador de tareas en segundo plano iniciado.")
-    
+
     logger.info("🎾 Bot de Pádel iniciado y escuchando...")
     await dp.start_polling(bot)
 

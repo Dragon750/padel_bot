@@ -10,11 +10,11 @@ from bot.database.models import Match, MatchPlayer
 logger = logging.getLogger(__name__)
 
 async def check_cancellations(bot: Bot):
-    """Vigilante: Cancela partidos a T-30min si no hay pista o faltan jugadores"""
+    """Vigilante: Cancela partidos a T-15min si no hay pista o faltan jugadores"""
     now = datetime.now()
-    # Ventana temporal: Partidos que empiezan entre los próximos 30 y 40 minutos
-    upper_limit = now + timedelta(minutes=40)
-    lower_limit = now + timedelta(minutes=30)
+    # Ventana temporal: Partidos que empiezan entre los próximos 15 y 25 minutos
+    upper_limit = now + timedelta(minutes=25)
+    lower_limit = now + timedelta(minutes=15)
     
     async with AsyncSessionLocal() as session:
         stmt = select(Match).where(
@@ -26,11 +26,10 @@ async def check_cancellations(bot: Bot):
         matches = result.scalars().all()
         
         for match in matches:
-            # Contar jugadores inscritos en este partido
             stmt_players = select(func.count()).select_from(MatchPlayer).where(MatchPlayer.match_id == match.id)
             players_count = await session.scalar(stmt_players)
             
-            # Condición de cancelación: Sin pista física O faltan jugadores
+            # Condición de cancelación ajustada
             if not match.is_court_booked or players_count < 4:
                 match.status = "CANCELLED"
                 await session.commit()
@@ -39,12 +38,12 @@ async def check_cancellations(bot: Bot):
                     await bot.send_message(
                         match.manager_id,
                         f"❌ <b>PARTIDO #{match.id} CANCELADO</b>\n\n"
-                        f"Tu convocatoria ha sido cancelada automáticamente porque no se llenaron las plazas o no se confirmó la reserva de pista a falta de 30 minutos."
+                        f"Tu convocatoria ha sido cancelada automáticamente porque no se llenaron las plazas o no se confirmó la reserva de pista a falta de 15 minutos."
                     )
                 except Exception as e:
                     logger.error(f"Error al notificar cancelación: {e}")
 
-
+                    
 async def remind_scores(bot: Bot):
     """Cobrador: Avisa al gestor a T+1.5h (Instrucciones) y T+2.5h (Recordatorio)"""
     now = datetime.now()
