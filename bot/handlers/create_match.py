@@ -190,8 +190,15 @@ async def process_date(callback: CallbackQuery, state: FSMContext):
 async def process_hour(callback: CallbackQuery, state: FSMContext):
     selected_hour = int(callback.data.split("_")[1])
     data = await state.get_data()
-    selected_date = data["date"]
+    selected_date = data.get("date")
     
+    # PROTECCIÓN
+    if not selected_date:
+        await state.clear()
+        await callback.message.edit_text("⏳ La sesión ha expirado. Por favor, empieza de nuevo con /crear.")
+        await callback.answer()
+        return
+        
     await state.update_data(hour=selected_hour)
     await state.set_state(CreateMatchFSM.waiting_for_minute)
     
@@ -207,8 +214,15 @@ async def process_hour(callback: CallbackQuery, state: FSMContext):
 async def process_minute(callback: CallbackQuery, state: FSMContext):
     time_str = callback.data.split("_")[1]
     data = await state.get_data()
-    selected_date = data["date"]
+    selected_date = data.get("date")
     
+    # PROTECCIÓN
+    if not selected_date:
+        await state.clear()
+        await callback.message.edit_text("⏳ La sesión ha expirado. Por favor, empieza de nuevo con /crear.")
+        await callback.answer()
+        return
+        
     time_obj = datetime.strptime(time_str, "%H:%M").time()
     final_datetime = datetime.combine(selected_date, time_obj)
     
@@ -251,9 +265,16 @@ async def nav_back_to_date(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "back_to_hours")
 async def nav_back_to_hours(callback: CallbackQuery, state: FSMContext):
-    """Vuelve de Minutos a Hora"""
+    """Vuelve de Minutos a Hora con protección de reinicio de memoria"""
     data = await state.get_data()
-    selected_date = data["date"]
+    selected_date = data.get("date")
+    
+    # PROTECCIÓN: Si la memoria se borró por un reinicio del bot, cancelamos limpiamente
+    if not selected_date:
+        await state.clear()
+        await callback.message.edit_text("⏳ La sesión ha expirado por inactividad o reinicio del sistema. Por favor, empieza de nuevo con /crear.")
+        await callback.answer()
+        return
     
     await state.set_state(CreateMatchFSM.waiting_for_hour)
     await callback.message.edit_text(
@@ -456,11 +477,18 @@ async def cancel_creation_flow(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "back_to_minutes")
 async def nav_back_to_minutes(callback: CallbackQuery, state: FSMContext):
-    """Vuelve de la selección de Nivel a la selección de Minutos."""
+    """Vuelve de la selección de Nivel a la selección de Minutos con protección."""
     data = await state.get_data()
-    selected_hour = data["hour"]
-    selected_date = data["date"]
+    selected_hour = data.get("hour")
+    selected_date = data.get("date")
     
+    # PROTECCIÓN: Si falta algún dato, cancelamos limpiamente
+    if selected_hour is None or selected_date is None:
+        await state.clear()
+        await callback.message.edit_text("⏳ La sesión ha expirado por reinicio. Por favor, empieza de nuevo con /crear.")
+        await callback.answer()
+        return
+        
     await state.set_state(CreateMatchFSM.waiting_for_minute)
     await callback.message.edit_text(
         f"⏰ Has elegido las <b>{selected_hour:02d}h</b>.\n"
@@ -482,19 +510,22 @@ async def nav_back_to_levels(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 @router.callback_query(F.data == "back_to_min_level")
-async def nav_back_to_min_level(callback: CallbackQuery, state: FSMContext, bot: Bot):
+async def nav_back_to_min_level(callback: CallbackQuery, state: FSMContext):
     """Vuelve del paso 2 (máximo) al paso 1 (mínimo) del nivel personalizado."""
+    data = await state.get_data()
+    
+    # PROTECCIÓN: Verificamos que el ID exista
+    if not data.get("prompt_message_id"):
+        await state.clear()
+        await callback.message.edit_text("⏳ La sesión ha expirado por reinicio. Por favor, empieza de nuevo con /crear.")
+        await callback.answer()
+        return
+
     await state.set_state(CreateMatchFSM.waiting_for_min_level)
     
-    data = await state.get_data()
-    prompt_message_id = data.get("prompt_message_id")
-    
-    if prompt_message_id:
-        await bot.edit_message_text(
-            chat_id=callback.message.chat.id,
-            message_id=prompt_message_id,
-            text="✏️ <b>Nivel Personalizado (Paso 1/2)</b>\n\n"
-                 "Escribe el nivel <b>MÍNIMO</b> aceptado (ej. 2.5):",
-            reply_markup=build_back_to_levels_keyboard()
-        )
+    await callback.message.edit_text(
+        text="✏️ <b>Nivel Personalizado (Paso 1/2)</b>\n\n"
+             "Escribe el nivel <b>MÍNIMO</b> aceptado (ej. 2.5):",
+        reply_markup=build_back_to_levels_keyboard()
+    )
     await callback.answer()
