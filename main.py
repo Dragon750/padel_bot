@@ -58,8 +58,7 @@ async def main():
 
     # Registrar el router principal con todos los módulos
     dp.include_router(main_router)
-    dp.include_router(match_card.router)
-    
+
     # Configurar menú de comandos y limpiar mensajes pendientes
     await set_bot_commands(bot)
     await bot.delete_webhook(drop_pending_updates=True)
