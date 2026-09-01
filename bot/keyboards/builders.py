@@ -117,3 +117,9 @@ def build_address_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="🔙 Volver a Ubicaciones", callback_data="back_to_location")
     builder.adjust(1)
     return builder.as_markup()
+
+def build_back_to_min_level_keyboard() -> InlineKeyboardMarkup:
+    """Teclado para volver al paso 1 del nivel personalizado (mínimo)."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔙 Volver a Nivel Mínimo", callback_data="back_to_min_level")
+    return builder.as_markup()
