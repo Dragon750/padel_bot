@@ -1,24 +1,50 @@
 import asyncio
 import logging
-import os
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.types import BotCommand
 
-# Configuración básica de logs
+from bot.config import config
+from bot.database.base import AsyncSessionLocal
+from bot.handlers import main_router
+
+# Configuración de logs
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+async def set_bot_commands(bot: Bot):
+    """Registra el menú de comandos en Telegram"""
+    commands = [
+        BotCommand(command="start", description="Iniciar el bot y ver tu nivel"),
+        BotCommand(command="crear", description="Organizar una convocatoria pública"),
+        BotCommand(command="crear_privado", description="Registrar un partido privado/cerrado"),
+        BotCommand(command="sugerir_ubicacion", description="Proponer una nueva pista")
+    ]
+    await bot.set_my_commands(commands)
 
 async def main():
-    token = os.getenv("BOT_TOKEN")
-    if not token:
-        raise ValueError("BOT_TOKEN no encontrado en las variables de entorno")
-
-    bot = Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = Bot(
+        token=config.BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    )
     dp = Dispatcher()
 
-    logging.info("Iniciando Pádel Arroyo Bot...")
-    # Eliminar webhooks previos y arrancar en polling
+    # Middleware: Inyecta una sesión AsyncSession de SQLAlchemy en cada evento
+    @dp.update.middleware()
+    async def db_session_middleware(handler, event, data):
+        async with AsyncSessionLocal() as session:
+            data["session"] = session
+            return await handler(event, data)
+
+    # Registrar el router principal con todos los módulos
+    dp.include_router(main_router)
+
+    # Configurar menú de comandos y limpiar mensajes pendientes
+    await set_bot_commands(bot)
     await bot.delete_webhook(drop_pending_updates=True)
+    
+    logger.info("🎾 Bot de Pádel iniciado y escuchando...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
