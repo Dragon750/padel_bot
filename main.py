@@ -3,70 +3,67 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import (
-    BotCommand, 
-    BotCommandScopeAllPrivateChats, 
-    BotCommandScopeAllGroupChats
-)
+from aiogram.types import BotCommand
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from bot.config import config
 from bot.database.base import AsyncSessionLocal
 from bot.handlers import main_router
-from bot.services.scheduler import setup_scheduler
-from bot.handlers import match_card
+from bot.services.scheduler import check_cancellations, request_scores, auto_close_matches
 
-# Configuración de logs
+# Configuración de logs para ver qué pasa en Railway
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 async def set_bot_commands(bot: Bot):
-    """Registra los menús de comandos separados por tipo de chat"""
-    
-    # 1. Comandos EXCLUSIVOS para el CHAT PRIVADO
-    private_commands = [
-        BotCommand(command="start", description="Iniciar el bot y ver tu nivel"),
-        BotCommand(command="crear_privado", description="Registrar un partido cerrado"),
-        BotCommand(command="sugerir_ubicacion", description="Proponer una nueva pista")
+    """Fija el menú de comandos oficial de Telegram"""
+    commands = [
+        BotCommand(command="start", description="Ver mi perfil y nivel"),
+        BotCommand(command="crear", description="Convocar partido público"),
+        BotCommand(command="crear_privado", description="Registrar acta de partido privado"),
+        BotCommand(command="sugerir_ubicacion", description="Proponer una nueva pista"),
+        BotCommand(command="panel", description="[Admin] Panel de moderación")
     ]
-    await bot.set_my_commands(
-        private_commands, 
-        scope=BotCommandScopeAllPrivateChats()
-    )
-
-    # 2. Comandos EXCLUSIVOS para GRUPOS (El pueblo)
-    group_commands = [
-        BotCommand(command="crear", description="Organizar una convocatoria pública")
-    ]
-    await bot.set_my_commands(
-        group_commands, 
-        scope=BotCommandScopeAllGroupChats()
-    )
+    await bot.set_my_commands(commands)
 
 async def main():
+    # Instanciamos el bot con parseo HTML por defecto
     bot = Bot(
         token=config.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
     dp = Dispatcher()
 
-    # Middleware: Inyecta una sesión AsyncSession de SQLAlchemy en cada evento
+    # Middleware: Inyecta la sesión de DB en cada clic o mensaje automáticamente
     @dp.update.middleware()
     async def db_session_middleware(handler, event, data):
         async with AsyncSessionLocal() as session:
             data["session"] = session
             return await handler(event, data)
 
-    # Registrar el router principal con todos los módulos
+    # Conectamos todos los controladores
     dp.include_router(main_router)
 
-    # Configurar menú de comandos y limpiar mensajes pendientes
-    await set_bot_commands(bot)
-    await bot.delete_webhook(drop_pending_updates=True)
+    # ---------------------------------------------------------
+    # CONFIGURACIÓN DEL PLANIFICADOR DE TAREAS (APScheduler)
+    # ---------------------------------------------------------
+    scheduler = AsyncIOScheduler(timezone=config.TZ)
+    # 1. Busca partidos por cancelar cada 5 minutos
+    scheduler.add_job(check_cancellations, 'interval', minutes=5, args=[bot])
+    # 2. Busca partidos para pedir acta cada 30 minutos
+    scheduler.add_job(request_scores, 'interval', minutes=30, args=[bot])
+    # 3. Busca partidos para cerrar tácitamente cada 1 hora
+    scheduler.add_job(auto_close_matches, 'interval', hours=1, args=[bot])
     
-    scheduler = setup_scheduler(bot)
     scheduler.start()
-    logger.info("⏱️ Planificador de tareas en segundo plano iniciado.")
+    logger.info("⏰ Tareas programadas iniciadas correctamente.")
 
+    # ---------------------------------------------------------
+    # ARRANQUE DE TELEGRAM
+    # ---------------------------------------------------------
+    await set_bot_commands(bot)
+    await bot.delete_webhook(drop_pending_updates=True) # Ignora mensajes viejos al reiniciar
+    
     logger.info("🎾 Bot de Pádel iniciado y escuchando...")
     await dp.start_polling(bot)
 
