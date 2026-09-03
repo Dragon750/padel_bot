@@ -15,16 +15,27 @@ from bot.services.scheduler import check_cancellations, request_scores, auto_clo
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+from aiogram.types import (
+    BotCommand, 
+    BotCommandScopeAllPrivateChats, 
+    BotCommandScopeAllGroupChats
+)
+
 async def set_bot_commands(bot: Bot):
-    """Fija el menú de comandos oficial de Telegram"""
-    commands = [
+    """Fija los comandos exclusivos en privado y limpia los grupos."""
+    
+    # 1. Comandos EXCLUSIVOS para CHAT PRIVADO (incluyendo /crear)
+    private_commands = [
         BotCommand(command="start", description="Ver mi perfil y nivel"),
         BotCommand(command="crear", description="Convocar partido público"),
-        BotCommand(command="crear_privado", description="Registrar acta de partido privado"),
+        BotCommand(command="crear_privado", description="Registrar acta de partido cerrado"),
         BotCommand(command="sugerir_ubicacion", description="Proponer una nueva pista"),
         BotCommand(command="panel", description="[Admin] Panel de moderación")
     ]
-    await bot.set_my_commands(commands)
+    await bot.set_my_commands(private_commands, scope=BotCommandScopeAllPrivateChats())
+
+    # 2. ELIMINAR comandos de los GRUPOS (el menú del grupo queda 100% limpio)
+    await bot.delete_my_commands(scope=BotCommandScopeAllGroupChats())
 
 async def main():
     # Instanciamos el bot con parseo HTML por defecto

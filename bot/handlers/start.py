@@ -38,18 +38,22 @@ async def cmd_start(message: Message, session: AsyncSession):
 
 @router.callback_query(F.data.startswith("setlevel_"))
 async def process_initial_level(callback: CallbackQuery, session: AsyncSession):
-    """Guarda el nuevo usuario en Supabase con el nivel seleccionado"""
-    level = float(callback.data.split("_")[1])
-    user_id = callback.from_user.id
+    level_val = float(callback.data.split("_")[1])
     
-    new_user = User(
-        telegram_id=user_id,
-        username=callback.from_user.username,
-        full_name=callback.from_user.full_name,
-        level=level
-    )
-    session.add(new_user)
+    user = await session.get(User, callback.from_user.id)
+    if not user:
+        user = User(
+            telegram_id=callback.from_user.id,
+            username=callback.from_user.username,
+            full_name=callback.from_user.full_name,
+            level=level_val
+        )
+        session.add(user)
+    else:
+        user.level = level_val
+        
     await session.commit()
-    
-    await callback.message.edit_text(f"✅ ¡Perfil creado con éxito!\nNivel inicial fijado en: **{level}**")
+    await callback.message.edit_text(
+        f"✅ ¡Perfil completado!\nTu nivel inicial ha sido fijado en <b>{level_val:.1f}</b>."
+    )
     await callback.answer()

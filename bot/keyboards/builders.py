@@ -3,6 +3,19 @@ from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.database.models import Location
 
+def build_initial_level_keyboard() -> InlineKeyboardMarkup:
+    """Genera la botonera de registro inicial desde 0.0 hasta 6.0 en saltos de 0.5."""
+    builder = InlineKeyboardBuilder()
+    
+    # Valores de 0.0 a 6.0 (pasos de 0.5)
+    levels = [round(x * 0.5, 1) for x in range(13)]  # [0.0, 0.5, 1.0, ..., 6.0]
+    
+    for lvl in levels:
+        builder.button(text=f"{lvl:.1f}", callback_data=f"setlevel_{lvl:.1f}")
+        
+    builder.adjust(4)  # 4 botones por fila para una distribución equilibrada
+    return builder.as_markup()
+
 def build_locations_keyboard(locations: list[Location]) -> InlineKeyboardMarkup:
     """Catálogo de pistas con opción de cancelar la creación."""
     builder = InlineKeyboardBuilder()
