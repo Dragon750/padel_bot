@@ -4,6 +4,8 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from bot.handlers.match_card import render_match_card
+from bot.services.fuzzy_matcher import get_similar_locations
+from bot.keyboards.builders import build_fuzzy_locations_keyboard
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -76,31 +78,83 @@ async def process_location(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 # ==========================================
-# 2B. ENTRADA MANUAL DE PISTA Y OMITIR DIRECCIÓN
+# ENTRADA MANUAL Y FUZZY MATCHING
 # ==========================================
 @router.message(CreateMatchFSM.waiting_for_custom_location_name)
-async def process_custom_location_name(message: Message, state: FSMContext, bot: Bot):
-    """Captura el nombre, borra el mensaje del usuario y edita la tarjeta original"""
+async def process_custom_location_name(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    """Captura el nombre de la pista, consulta el algoritmo de duplicados y edita la tarjeta"""
     try:
         await message.delete()
     except Exception:
         pass 
         
-    await state.update_data(custom_loc_name=message.text.strip())
-    await state.set_state(CreateMatchFSM.waiting_for_custom_location_address)
+    custom_loc_name = message.text.strip()
+    await state.update_data(custom_loc_name=custom_loc_name)
     
     data = await state.get_data()
     prompt_message_id = data.get("prompt_message_id")
     
-    if prompt_message_id:
+    # Ejecutamos la búsqueda de similitud (>75%)
+    similar_locs = await get_similar_locations(session, custom_loc_name, threshold=0.75)
+    
+    if similar_locs and prompt_message_id:
+        # 1. Hay coincidencias: Mostramos el menú interactivo
         await bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=prompt_message_id,
-            text="📍 Ahora escribe la <b>dirección aproximada o el enlace de Google Maps</b>:\n\n"
-                 "<i>(Si no lo tienes a mano, pulsa en Omitir y se añadirá más adelante)</i>.",
-            reply_markup=build_address_keyboard()
+            text=f"🔍 <b>Hemos encontrado pistas similares.</b>\n\n"
+                 f"Has escrito <i>'{custom_loc_name}'</i>.\n"
+                 f"¿Te refieres a alguna de estas o es una pista completamente nueva?",
+            reply_markup=build_fuzzy_locations_keyboard(similar_locs)
         )
+    else:
+        # 2. No hay coincidencias: Saltamos directo a pedir la dirección de Maps
+        await state.set_state(CreateMatchFSM.waiting_for_custom_location_address)
+        if prompt_message_id:
+            await bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=prompt_message_id,
+                text="📍 Ahora escribe la <b>dirección aproximada o el enlace de Google Maps</b>:\n\n"
+                     "<i>(Si no lo tienes a mano, pulsa en Omitir y se añadirá más adelante)</i>.",
+                reply_markup=build_address_keyboard()
+            )
 
+
+@router.callback_query(F.data.startswith("fuzzymatch_"))
+async def process_fuzzy_resolution(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Gestiona la decisión del usuario ante las sugerencias de duplicados."""
+    action = callback.data.split("_")[1]
+    data = await state.get_data()
+    prompt_message_id = data.get("prompt_message_id")
+    
+    if action == "none":
+        # El usuario confirma que es una pista distinta y quiere continuar creándola
+        await state.set_state(CreateMatchFSM.waiting_for_custom_location_address)
+        if prompt_message_id:
+            await bot.edit_message_text(
+                chat_id=callback.message.chat.id,
+                message_id=prompt_message_id,
+                text="📍 Ahora escribe la <b>dirección aproximada o el enlace de Google Maps</b>:\n\n"
+                     "<i>(Si no lo tienes a mano, pulsa en Omitir y se añadirá más adelante)</i>.",
+                reply_markup=build_address_keyboard()
+            )
+    else:
+        # El usuario recicla una pista existente evitando el duplicado
+        loc_id = int(action)
+        await state.update_data(location_id=loc_id)
+        await state.set_state(CreateMatchFSM.waiting_for_date)
+        
+        if prompt_message_id:
+            await bot.edit_message_text(
+                chat_id=callback.message.chat.id,
+                message_id=prompt_message_id,
+                text="✅ Pista seleccionada correctamente.\n\n"
+                     "📅 <b>¿Qué día se jugará?</b>\n\n"
+                     "Selecciona una de las siguientes fechas:",
+                reply_markup=build_dates_keyboard()
+            )
+            
+    await callback.answer()
 
 @router.callback_query(CreateMatchFSM.waiting_for_custom_location_address, F.data == "skip_address")
 async def skip_custom_location_address(callback: CallbackQuery, state: FSMContext, session: AsyncSession):

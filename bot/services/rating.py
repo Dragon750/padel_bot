@@ -1,57 +1,40 @@
-def get_k_factor(matches_played: int) -> float:
-    """
-    Calcula el factor K decreciente de 0.24 a 0.10 en 10 partidos.
-    A mayor K, más cambia el nivel (ideal para calibrar usuarios nuevos).
-    """
-    k = 0.24 - (0.014 * matches_played)
-    return max(0.10, round(k, 4))
+import math
 
+def calculate_k_factor(matches_played: int) -> float:
+    """K factor progresivo para jugadores irregulares (0.24 -> 0.10 en 10 partidos)."""
+    return max(0.10, 0.24 - (0.014 * matches_played))
 
-def calculate_new_levels(
-    p1_levels: list[float], 
-    p2_levels: list[float], 
-    sets_p1: int, 
-    sets_p2: int,
-    matches_played: list[int]
-) -> tuple[list[float], list[float]]:
-    """
-    Calcula la variación de nivel de cada jugador basándose en:
-    - La media del equipo.
-    - La probabilidad esperada de victoria.
-    - La contundencia del resultado (S).
-    - El factor K decreciente de cada jugador.
-    """
-    # 1. Medias de nivel de cada pareja
-    r_p1 = sum(p1_levels) / len(p1_levels) if p1_levels else 0
-    r_p2 = sum(p2_levels) / len(p2_levels) if p2_levels else 0
+def update_team_ratings(
+    team1_players: list[tuple[int, float, int]],  # [(id, level, matches_played)]
+    team2_players: list[tuple[int, float, int]], 
+    team1_sets: int, 
+    team2_sets: int
+) -> dict[int, float]:
+    """Calcula las nuevas puntuaciones con la curva logística ELO y bonus de victoria."""
+    avg_t1 = sum(p[1] for p in team1_players) / max(len(team1_players), 1)
+    avg_t2 = sum(p[1] for p in team2_players) / max(len(team2_players), 1)
 
-    # 2. Expectativa de victoria (Probabilidad E)
-    e_p1 = 1.0 / (1.0 + 10 ** (r_p2 - r_p1))
-    e_p2 = 1.0 - e_p1
+    diff = avg_t2 - avg_t1
+    expected_t1 = 1.0 / (1.0 + math.pow(10, diff / 1.5))
+    expected_t2 = 1.0 - expected_t1
 
-    # 3. Ponderación del resultado real (S) por margen de sets
-    if sets_p1 > sets_p2:
-        s_p1, s_p2 = (1.0, 0.0) if sets_p2 == 0 else (0.85, 0.15)
-    elif sets_p2 > sets_p1:
-        s_p2, s_p1 = (1.0, 0.0) if sets_p1 == 0 else (0.85, 0.15)
-    else:
-        # En caso extremo de empate anómalo (previene errores matemáticos)
-        s_p1, s_p2 = 0.5, 0.5
+    actual_t1 = 1.0 if team1_sets > team2_sets else 0.0
+    actual_t2 = 1.0 - actual_t1
+    
+    # Bonus/Malus fijo de victoria según requerimientos
+    bonus_t1 = 0.05 if actual_t1 == 1.0 else -0.05
+    bonus_t2 = 0.05 if actual_t2 == 1.0 else -0.05
 
-    # 4. Actualización Pareja 1
-    new_p1 = []
-    for i, level in enumerate(p1_levels):
-        k = get_k_factor(matches_played[i])
-        # Fórmula: Nivel Actual + K * (Resultado - Expectativa)
-        new_val = max(0.0, min(6.0, round(level + k * (s_p1 - e_p1), 2)))
-        new_p1.append(new_val)
+    new_ratings = {}
 
-    # 5. Actualización Pareja 2
-    new_p2 = []
-    for i, level in enumerate(p2_levels):
-        # Desplazamos el índice 'i' para leer los partidos jugados de la Pareja 2
-        k = get_k_factor(matches_played[len(p1_levels) + i])
-        new_val = max(0.0, min(6.0, round(level + k * (s_p2 - e_p2), 2)))
-        new_p2.append(new_val)
+    for uid, lvl, played in team1_players:
+        k = calculate_k_factor(played)
+        delta = k * (actual_t1 - expected_t1) + bonus_t1
+        new_ratings[uid] = round(max(0.0, min(6.0, lvl + delta)), 2)
 
-    return new_p1, new_p2
+    for uid, lvl, played in team2_players:
+        k = calculate_k_factor(played)
+        delta = k * (actual_t2 - expected_t2) + bonus_t2
+        new_ratings[uid] = round(max(0.0, min(6.0, lvl + delta)), 2)
+
+    return new_ratings

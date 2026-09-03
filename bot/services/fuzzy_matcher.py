@@ -1,25 +1,33 @@
+import unicodedata
 import difflib
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from bot.database.models import Location
 
-def get_similar_locations(
-    suggested_name: str, 
-    existing_locations: list[Location], 
-    threshold: float = 0.75
-) -> list[Location]:
+def normalize_text(text: str) -> str:
+    """Elimina tildes, signos y normaliza a minúsculas."""
+    text = text.lower().strip()
+    return unicodedata.normalize("NFKD", text).encode("ASCII", "ignore").decode("utf-8")
+
+async def get_similar_locations(session: AsyncSession, name: str, threshold: float = 0.75) -> list[tuple[Location, float]]:
     """
-    Compara el nombre sugerido con las pistas de la base de datos.
-    Devuelve aquellas que tengan una similitud superior al umbral (75%).
+    Busca todas las pistas con una similitud >= al umbral (75%).
+    Devuelve una lista de tuplas (Location, porcentaje) ordenada de mayor a menor.
     """
-    similar = []
-    suggested_lower = suggested_name.lower().strip()
+    result = await session.execute(select(Location))
+    all_locations = result.scalars().all()
     
-    for loc in existing_locations:
-        loc_lower = loc.name.lower().strip()
-        
+    similar = []
+    norm_name = normalize_text(name)
+    
+    for loc in all_locations:
+        norm_loc = normalize_text(loc.name)
         # Algoritmo de similitud nativo de Python (Gestalt pattern matching)
-        ratio = difflib.SequenceMatcher(None, suggested_lower, loc_lower).ratio()
+        ratio = difflib.SequenceMatcher(None, norm_name, norm_loc).ratio()
         
         if ratio >= threshold:
-            similar.append(loc)
+            similar.append((loc, ratio))
             
+    # Ordenar por el porcentaje más alto
+    similar.sort(key=lambda x: x[1], reverse=True)
     return similar

@@ -4,19 +4,15 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.states.action_states import MatchActionFSM
-from bot.database.models import MatchWaitlist
+from bot.database.models import MatchWaitlist, Match, MatchPlayer, Location, User
+from bot.keyboards.inline import match_card_kb
+from datetime import datetime, timedelta
 from sqlalchemy import select, asc, func
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from bot.database.models import Match, MatchPlayer, Location, User
-from bot.keyboards.inline import match_card_kb
 
 router = Router()
 logger = logging.getLogger(__name__)
 
-# ==========================================
-# FUNCIÓN DIBUJANTE: Reconstruye la tarjeta
-# ==========================================
 # ==========================================
 # FUNCIÓN DIBUJANTE: Reconstruye la tarjeta
 # ==========================================
@@ -73,24 +69,31 @@ async def render_match_card(match_id: int, session: AsyncSession) -> tuple[str, 
 
 @router.callback_query(F.data.startswith("join_"))
 async def handle_join(callback: CallbackQuery, session: AsyncSession, bot: Bot):
-    """Permite a un usuario ocupar un hueco libre en Pareja 1 o Pareja 2."""
+    """Permite a un usuario ocupar un hueco validando nivel y plazas libres."""
     _, str_match_id, str_team = callback.data.split("_")
     match_id, team = int(str_match_id), int(str_team)
     user_id = callback.from_user.id
     
-    # Comprobar si el partido sigue abierto
     match = await session.get(Match, match_id)
     if match.status not in ["OPEN", "FULL"]:
         await callback.answer("❌ Este partido ya no admite inscripciones.", show_alert=True)
         return
 
-    # Comprobar si el usuario ya está dentro
+    # --- NUEVA VALIDACIÓN DE NIVEL ---
+    user = await session.get(User, user_id)
+    if not (match.min_level <= user.level <= match.max_level):
+        await callback.answer(
+            f"⛔ Tu nivel ({user.level:.1f}) está fuera del rango permitido ({match.min_level:.1f} - {match.max_level:.1f}).", 
+            show_alert=True
+        )
+        return
+    # ---------------------------------
+
     stmt_exist = select(MatchPlayer).where(MatchPlayer.match_id == match_id, MatchPlayer.user_id == user_id)
     if await session.scalar(stmt_exist):
         await callback.answer("⚠️ Ya estás inscrito en este partido.", show_alert=True)
         return
 
-    # Comprobar si hay hueco en el equipo solicitado
     stmt_count = select(MatchPlayer).where(MatchPlayer.match_id == match_id, MatchPlayer.team == team)
     team_players = (await session.scalars(stmt_count)).all()
     
@@ -98,21 +101,17 @@ async def handle_join(callback: CallbackQuery, session: AsyncSession, bot: Bot):
         await callback.answer("❌ Esa pareja ya está llena. Intenta en la otra.", show_alert=True)
         return
 
-    # Inscribir al jugador
     new_player = MatchPlayer(match_id=match_id, user_id=user_id, team=team)
     session.add(new_player)
     
-    # Comprobar si el partido se ha llenado (4 jugadores en total)
     stmt_total = select(MatchPlayer).where(MatchPlayer.match_id == match_id)
-    total_players = len((await session.scalars(stmt_total)).all()) + 1 # Sumamos 1 por el que acaba de entrar
+    total_players = len((await session.scalars(stmt_total)).all()) + 1 
     
     if total_players == 4:
         match.status = "FULL"
-        # Si se llena y no hay pista, podríamos avisar al manager aquí.
         
     await session.commit()
     
-    # Actualizar la tarjeta visualmente
     text, maps_url, is_booked = await render_match_card(match_id, session)
     await callback.message.edit_text(text, reply_markup=match_card_kb(match_id, is_booked, maps_url))
     await callback.answer("✅ ¡Te has unido al partido!")
@@ -150,7 +149,7 @@ async def handle_swap(callback: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data.startswith("leave_"))
 async def handle_leave(callback: CallbackQuery, session: AsyncSession, bot: Bot):
-    """Saca al jugador del partido y gestiona el relevo de manager si es necesario."""
+    """Saca al jugador del partido, aplica penalizaciones y gestiona relevos."""
     match_id = int(callback.data.split("_")[1])
     user_id = callback.from_user.id
     
@@ -163,16 +162,23 @@ async def handle_leave(callback: CallbackQuery, session: AsyncSession, bot: Bot)
         
     match = await session.get(Match, match_id)
     
-    # Borrar al jugador
+    # --- NUEVA PENALIZACIÓN POR BAJA TARDÍA ---
+    time_diff = match.datetime - datetime.now()
+    if time_diff < timedelta(hours=2):
+        user = await session.get(User, user_id)
+        user.late_cancellations += 1
+        await callback.answer("⚠️ Baja tardía (menos de 2h). Se ha sumado una penalización a tu perfil.", show_alert=True)
+    else:
+        await callback.answer("👋 Te has salido del partido correctamente.")
+    # ------------------------------------------
+    
     await session.delete(player)
     
-    # Si el partido estaba FULL, ahora vuelve a estar OPEN
     if match.status == "FULL":
         match.status = "OPEN"
         
-    await session.flush() # Aplicamos el borrado sin cerrar la transacción aún
+    await session.flush() 
     
-    # ¿Era el organizador? Traspasamos el liderazgo al jugador más antiguo
     if match.manager_id == user_id:
         stmt_oldest = select(MatchPlayer).where(MatchPlayer.match_id == match_id).order_by(asc(MatchPlayer.joined_at)).limit(1)
         oldest_player = await session.scalar(stmt_oldest)
@@ -182,14 +188,11 @@ async def handle_leave(callback: CallbackQuery, session: AsyncSession, bot: Bot)
             try:
                 await bot.send_message(
                     oldest_player.user_id,
-                    f"👑 <b>ERES EL NUEVO ORGANIZADOR</b>\n"
-                    f"El creador del partido #{match.id} se ha dado de baja. Por ser el jugador más antiguo, "
-                    f"ahora eres tú el responsable de introducir el marcador final."
+                    f"👑 <b>ERES EL NUEVO ORGANIZADOR</b>\nEl creador del partido #{match.id} se ha dado de baja. Ahora eres el responsable."
                 )
             except Exception:
                 pass
         else:
-            # Si no queda nadie en el partido, lo cancelamos automáticamente
             match.status = "CANCELLED"
             
     await session.commit()
@@ -199,13 +202,12 @@ async def handle_leave(callback: CallbackQuery, session: AsyncSession, bot: Bot)
     else:
         text, maps_url, is_booked = await render_match_card(match_id, session)
         await callback.message.edit_text(text, reply_markup=match_card_kb(match_id, is_booked, maps_url))
+        
     if match.status != "CANCELLED":
-        # Despertar a los reservas!
         await notify_waitlist(match_id, session, bot)
- 
-    await callback.answer("👋 Te has salido del partido correctamente.")
-    
-    # ==========================================
+
+
+# ==========================================
 # RESERVA COLABORATIVA (CUALQUIER JUGADOR)
 # ==========================================
 @router.callback_query(F.data.startswith("ihavecourt_"))

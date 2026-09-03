@@ -135,3 +135,19 @@ def build_court_status_keyboard() -> InlineKeyboardMarkup:
     
     builder.adjust(1) # Pone los botones uno debajo de otro
     return builder.as_markup()
+
+def build_fuzzy_locations_keyboard(similar_locations: list) -> InlineKeyboardMarkup:
+    """Genera la lista de botones con las coincidencias encontradas."""
+    builder = InlineKeyboardBuilder()
+    
+    for loc, ratio in similar_locations:
+        pct = int(ratio * 100)
+        icon = "📍" if loc.is_approved else "❓"
+        builder.button(
+            text=f"{icon} {loc.name} ({pct}%)", 
+            callback_data=f"fuzzymatch_{loc.id}"
+        )
+        
+    builder.button(text="➕ Ninguna, es una pista distinta", callback_data="fuzzymatch_none")
+    builder.adjust(1) # Un botón debajo del otro para facilitar la lectura
+    return builder.as_markup()
