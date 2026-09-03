@@ -32,13 +32,13 @@ from aiogram.types import (
 async def set_bot_commands(bot: Bot):
     """Configura la visibilidad estricta de comandos según chat y privilegios."""
     
-    # 1. ELIMINAR el catálogo global por defecto (para que nadie herede comandos no deseados)
+    # 1. ELIMINAR el catálogo global por defecto (para que nadie herede comandos)
     await bot.delete_my_commands(scope=BotCommandScopeDefault())
     
-    # 2. ELIMINAR comandos de los GRUPOS (el menú '/' quedará 100% vacío en los grupos)
+    # 2. ELIMINAR comandos de los GRUPOS (el menú '/' queda vacío en grupos)
     await bot.delete_my_commands(scope=BotCommandScopeAllGroupChats())
 
-    # 3. Comandos VISIBLES para usuarios normales ÚNICAMENTE en chat PRIVADO
+    # 3. Comandos para USUARIOS NORMALES en chat privado (SIN /panel)
     user_commands = [
         BotCommand(command="start", description="Ver mi perfil y nivel"),
         BotCommand(command="crear", description="Convocar partido público"),
@@ -47,7 +47,7 @@ async def set_bot_commands(bot: Bot):
     ]
     await bot.set_my_commands(user_commands, scope=BotCommandScopeAllPrivateChats())
 
-    # 4. Comandos VISIBLES para el ADMINISTRADOR en su chat privado (añade /panel)
+    # 4. Comandos EXCLUSIVOS para el ADMINISTRADOR (con /panel)
     if config.ADMIN_TELEGRAM_ID:
         admin_commands = user_commands + [
             BotCommand(command="panel", description="Panel de moderación de pistas")

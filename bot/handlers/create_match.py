@@ -533,50 +533,63 @@ async def route_edit_field(callback: CallbackQuery, state: FSMContext, session: 
 # ==========================================
 @router.callback_query(CreateMatchFSM.confirming_summary, F.data == "publish_match")
 async def process_publish_match(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
+    await callback.answer("Publicando convocatoria...")  # Detiene el icono de carga de inmediato
+    
     data = await state.get_data()
-    target_chat_id = data["target_chat_id"]
+    target_chat_id = data.get("target_chat_id")
     user_id = callback.from_user.id
 
-    async with AsyncSessionLocal() as db_session:
-        # 1. Crear el partido en BBDD
-        new_match = Match(
-            manager_id=user_id,
-            location_id=data["location_id"],
-            datetime=data["datetime"],
-            min_level=data.get("min_level", 0.0),
-            max_level=data.get("max_level", 6.0),
-            is_court_booked=data["is_court_booked"],
-            court_number=data.get("court_number"),
-            booked_by=user_id if data["is_court_booked"] else None,
-            status="OPEN",
-            chat_id=target_chat_id
+    if not target_chat_id:
+        await callback.message.answer("⚠️ No se ha seleccionado un grupo válido. Vuelve a iniciar con /crear.")
+        await state.clear()
+        return
+
+    try:
+        async with AsyncSessionLocal() as db_session:
+            # 1. Crear el partido en BBDD
+            new_match = Match(
+                manager_id=user_id,
+                location_id=data["location_id"],
+                datetime=data["datetime"],
+                min_level=data.get("min_level", 0.0),
+                max_level=data.get("max_level", 6.0),
+                is_court_booked=data["is_court_booked"],
+                court_number=data.get("court_number"),
+                booked_by=user_id if data["is_court_booked"] else None,
+                status="OPEN",
+                chat_id=target_chat_id
+            )
+            db_session.add(new_match)
+            await db_session.flush()
+
+            # 2. Inscribir al creador en Pareja 1
+            creator_player = MatchPlayer(match_id=new_match.id, user_id=user_id, team=1)
+            db_session.add(creator_player)
+            await db_session.commit()
+
+            # 3. Renderizar tarjeta y publicar en el Grupo
+            text, maps_url, is_booked = await render_match_card(new_match.id, db_session)
+            kb = match_card_kb(new_match.id, is_booked, maps_url)
+            
+            group_msg = await bot.send_message(chat_id=target_chat_id, text=text, reply_markup=kb)
+            
+            # 4. Guardar ID del mensaje grupal para actualizaciones en vivo
+            new_match.message_id = group_msg.message_id
+            await db_session.commit()
+
+        await state.clear()
+
+        # 5. Confirmación final en el chat privado
+        await callback.message.edit_text(
+            f"✅ <b>¡Convocatoria publicada con éxito!</b>\n\n"
+            f"La tarjeta interactiva ya está disponible en <b>{data.get('target_chat_title', 'el grupo')}</b>."
         )
-        db_session.add(new_match)
-        await db_session.flush()
 
-        # 2. Inscribir al creador
-        creator_player = MatchPlayer(match_id=new_match.id, user_id=user_id, team=1)
-        db_session.add(creator_player)
-        await db_session.commit()
-
-        # 3. Renderizar y publicar en el Grupo
-        text, maps_url, is_booked = await render_match_card(new_match.id, db_session)
-        kb = match_card_kb(new_match.id, is_booked, maps_url)
-        
-        group_msg = await bot.send_message(chat_id=target_chat_id, text=text, reply_markup=kb)
-        
-        # 4. Guardar ID del mensaje público para ediciones futuras
-        new_match.message_id = group_msg.message_id
-        await db_session.commit()
-
-    await state.clear()
-
-    # 5. Confirmar en privado
-    await callback.message.edit_text(
-        f"✅ <b>¡Convocatoria publicada!</b>\n\n"
-        f"La tarjeta interactiva ya está disponible en <b>{data.get('target_chat_title')}</b>."
-    )
-    await callback.answer()
+    except Exception as e:
+        await callback.message.answer(
+            f"❌ <b>Error al publicar la convocatoria:</b> {e}\n\n"
+            "Verifica que el bot sigue dentro del grupo y tiene permisos para enviar mensajes[cite: 2]."
+        )
 
 # ==========================================
 # 9. BOTONES DE NAVEGACIÓN Y CANCELACIÓN

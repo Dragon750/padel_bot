@@ -1,4 +1,4 @@
-from datetime import datetime
+import datetime as dt
 from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, Integer, String, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -41,31 +41,28 @@ class Match(Base):
     __tablename__ = "matches"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    manager_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.telegram_id"))
-    location_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("locations.id"), nullable=True)
+    manager_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.telegram_id"), nullable=False)
+    location_id: Mapped[int] = mapped_column(Integer, ForeignKey("locations.id"), nullable=False)
     
-    datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    min_level: Mapped[float | None] = mapped_column(Float, nullable=True)
-    max_level: Mapped[float | None] = mapped_column(Float, nullable=True)
-    
-    # OPEN, FULL, VALIDATING, PLAYED, CANCELLED, DISPUTED
+    # Usamos dt.datetime para evitar colisión con el nombre del campo
+    datetime: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    min_level: Mapped[float] = mapped_column(Float, default=0.0)
+    max_level: Mapped[float] = mapped_column(Float, default=6.0)
     status: Mapped[str] = mapped_column(String(20), default="OPEN") 
-    is_private: Mapped[bool] = mapped_column(Boolean, default=False)
+    result: Mapped[str | None] = mapped_column(String(50), nullable=True)
     
-    # Gestión de Reserva Colaborativa
+    # Gestión de pista
     is_court_booked: Mapped[bool] = mapped_column(Boolean, default=False)
     court_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     booked_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.telegram_id"), nullable=True)
-    
-    # Marcador (ej: "6-4 3-6 7-6") y motivos de cancelación (ej: "CLUB_CANCELLED")
-    result: Mapped[str | None] = mapped_column(String(50), nullable=True)
     cancellation_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
     
-    # Referencias de mensaje interactivo en grupo
+    # Referencias del mensaje en el grupo
     chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
+    
+    # Timestamp generado por la base de datos
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, server_default=func.now())
 
 class MatchPlayer(Base):
     """Participantes de un partido (Usuarios registrados o invitados externos)"""
@@ -81,7 +78,7 @@ class MatchPlayer(Base):
     
     team: Mapped[int] = mapped_column(Integer)  # 1 (Pareja 1) o 2 (Pareja 2)
     has_confirmed_result: Mapped[bool] = mapped_column(Boolean, default=False)
-    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    joined_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class MatchWaitlist(Base):
@@ -91,4 +88,4 @@ class MatchWaitlist(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[int] = mapped_column(Integer, ForeignKey("matches.id", ondelete="CASCADE"))
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.telegram_id"))
-    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    joined_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
