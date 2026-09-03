@@ -172,13 +172,8 @@ async def handle_leave(callback: CallbackQuery, session: AsyncSession, bot: Bot)
         await callback.answer("👋 Te has salido del partido correctamente.")
     # ------------------------------------------
     
-    await session.delete(player)
-    
-    if match.status == "FULL":
-        match.status = "OPEN"
-        
-    await session.flush() 
-    
+    # ¿Era el organizador? Traspasamos el liderazgo o eliminamos la convocatoria
+    match_deleted = False
     if match.manager_id == user_id:
         stmt_oldest = select(MatchPlayer).where(MatchPlayer.match_id == match_id).order_by(asc(MatchPlayer.joined_at)).limit(1)
         oldest_player = await session.scalar(stmt_oldest)
@@ -188,23 +183,55 @@ async def handle_leave(callback: CallbackQuery, session: AsyncSession, bot: Bot)
             try:
                 await bot.send_message(
                     oldest_player.user_id,
-                    f"👑 <b>ERES EL NUEVO ORGANIZADOR</b>\nEl creador del partido #{match.id} se ha dado de baja. Ahora eres el responsable."
+                    f"👑 <b>ERES EL NUEVO ORGANIZADOR</b>\n"
+                    f"El creador del partido #{match.id} se ha dado de baja. Ahora eres el responsable."
                 )
             except Exception:
                 pass
         else:
-            match.status = "CANCELLED"
+            # Si no queda ningún jugador, eliminamos completamente el partido de PostgreSQL
+            await session.delete(match)
+            match_deleted = True
             
     await session.commit()
     
-    if match.status == "CANCELLED":
-        await callback.message.edit_text(f"❌ Convocatoria #{match.id} cancelada (no quedan jugadores).")
+    if match_deleted:
+        await callback.message.edit_text(f"❌ Convocatoria #{match_id} cancelada y retirada (todos los jugadores se dieron de baja).")
     else:
         text, maps_url, is_booked = await render_match_card(match_id, session)
         await callback.message.edit_text(text, reply_markup=match_card_kb(match_id, is_booked, maps_url))
-        
-    if match.status != "CANCELLED":
         await notify_waitlist(match_id, session, bot)
+
+@router.callback_query(F.data.startswith("cancel_club_"))
+async def handle_cancel_by_club(callback: CallbackQuery, session: AsyncSession, bot: Bot):
+    """Cancela el partido por motivos del club (se conserva en BD para estadísticas)"""
+    match_id = int(callback.data.split("_")[2])
+    match = await session.get(Match, match_id)
+    
+    if not match:
+        await callback.answer("El partido no existe o ya fue eliminado.", show_alert=True)
+        return
+
+    # Solo el gestor o quien reservó puede anular por causa de club
+    if callback.from_user.id not in [match.manager_id, match.booked_by]:
+        await callback.answer("⛔ Solo el organizador o el titular de la reserva puede anular la convocatoria.", show_alert=True)
+        return
+
+    # Marcamos como cancelado conservando el registro
+    match.status = "CANCELLED"
+    # Si tu modelo tiene la columna cancellation_reason:
+    if hasattr(match, "cancellation_reason"):
+        match.cancellation_reason = "CLUB_CANCELLED"
+        
+    await session.commit()
+
+    # Actualizar la tarjeta pública en el grupo
+    await callback.message.edit_text(
+        f"<b>CONVOCATORIA #{match_id} ANULADA POR EL CLUB</b>\n\n"
+        f"La pista no está disponible por motivos del club o meteorología. "
+        f"Este partido no penaliza a ningún participante."
+    )
+    await callback.answer("Convocatoria cancelada por motivos del club.")
 
 
 # ==========================================

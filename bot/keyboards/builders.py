@@ -151,3 +151,33 @@ def build_fuzzy_locations_keyboard(similar_locations: list) -> InlineKeyboardMar
     builder.button(text="➕ Ninguna, es una pista distinta", callback_data="fuzzymatch_none")
     builder.adjust(1) # Un botón debajo del otro para facilitar la lectura
     return builder.as_markup()
+
+def build_groups_keyboard(groups: list) -> InlineKeyboardMarkup:
+    """Lista los grupos compartidos disponibles."""
+    builder = InlineKeyboardBuilder()
+    for g in groups:
+        builder.button(text=f"👥 {g.title}", callback_data=f"target_group_{g.chat_id}")
+    builder.button(text="❌ Cancelar", callback_data="cancel_creation")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def build_summary_confirmation_kb() -> InlineKeyboardMarkup:
+    """Botonera de confirmación y modificación individual de cada parámetro."""
+    builder = InlineKeyboardBuilder()
+    
+    # Botón principal de publicación
+    builder.button(text="🚀 Publicar Convocatoria", callback_data="publish_match")
+    
+    # Botones de modificación dato por dato
+    builder.button(text="📍 Cambiar Club", callback_data="edit_field_location")
+    builder.button(text="📅 Cambiar Fecha", callback_data="edit_field_date")
+    builder.button(text="⏰ Cambiar Hora", callback_data="edit_field_hour")
+    builder.button(text="📊 Cambiar Nivel", callback_data="edit_field_level")
+    builder.button(text="🎾 Cambiar Pista", callback_data="edit_field_court")
+    builder.button(text="👥 Cambiar Grupo", callback_data="edit_field_group")
+    
+    # Cancelar
+    builder.button(text="❌ Cancelar Creación", callback_data="cancel_creation")
+    
+    builder.adjust(1, 2, 2, 2, 1)
+    return builder.as_markup()

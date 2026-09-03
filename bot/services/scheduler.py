@@ -10,9 +10,8 @@ from bot.database.models import Match, MatchPlayer
 logger = logging.getLogger(__name__)
 
 async def check_cancellations(bot: Bot):
-    """Vigilante: Cancela partidos a T-15min si no hay pista o faltan jugadores"""
+    """Vigilante: Elimina partidos a T-15min si no hay pista o faltan jugadores"""
     now = datetime.now()
-    # Ventana temporal: Partidos que empiezan entre los próximos 15 y 25 minutos
     upper_limit = now + timedelta(minutes=25)
     lower_limit = now + timedelta(minutes=15)
     
@@ -29,19 +28,38 @@ async def check_cancellations(bot: Bot):
             stmt_players = select(func.count()).select_from(MatchPlayer).where(MatchPlayer.match_id == match.id)
             players_count = await session.scalar(stmt_players)
             
-            # Condición de cancelación ajustada
+            # Condición: no se completó o no hay pista confirmada
             if not match.is_court_booked or players_count < 4:
-                match.status = "CANCELLED"
+                manager_id = match.manager_id
+                match_id = match.id
+                chat_id = match.chat_id
+                message_id = match.message_id
+                
+                # 1. Actualizar la tarjeta pública en el grupo
+                if chat_id and message_id:
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text=f"❌ <b>CONVOCATORIA #{match_id} CANCELADA</b>\n\n"
+                                 f"La convocatoria ha sido cancelada y retirada porque no se completaron las 4 plazas o no se confirmó la pista física a tiempo."
+                        )
+                    except Exception:
+                        pass
+                
+                # 2. Borrado físico en la base de datos para no ensuciar estadísticas
+                await session.delete(match)
                 await session.commit()
                 
+                # 3. Notificar al organizador
                 try:
                     await bot.send_message(
-                        match.manager_id,
-                        f"❌ <b>PARTIDO #{match.id} CANCELADO</b>\n\n"
-                        f"Tu convocatoria ha sido cancelada automáticamente porque no se llenaron las plazas o no se confirmó la reserva de pista a falta de 15 minutos."
+                        manager_id,
+                        f"❌ <b>PARTIDO #{match_id} CANCELADO</b>\n\n"
+                        f"Tu convocatoria ha sido cancelada y eliminada del sistema porque no se llenaron las plazas o no se confirmó la reserva a falta de 15 minutos."
                     )
                 except Exception as e:
-                    logger.error(f"Error al notificar cancelación: {e}")
+                    logger.error(f"Error al notificar cancelación al manager: {e}")
 
                     
 async def remind_scores(bot: Bot):

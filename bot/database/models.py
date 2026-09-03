@@ -4,6 +4,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 from bot.database.base import Base
 
+class GroupChat(Base):
+    __tablename__ = "group_chats"
+
+    chat_id: Mapped[int] = mapped_column(BigInt, primary_key=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    
 class User(Base):
     """Jugadores registrados en el bot con métricas para el ratio y rating"""
     __tablename__ = "users"
