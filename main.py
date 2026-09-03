@@ -21,21 +21,41 @@ from aiogram.types import (
     BotCommandScopeAllGroupChats
 )
 
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeDefault,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeChat
+)
+
 async def set_bot_commands(bot: Bot):
-    """Fija los comandos exclusivos en privado y limpia los grupos."""
+    """Configura la visibilidad estricta de comandos según chat y privilegios."""
     
-    # 1. Comandos EXCLUSIVOS para CHAT PRIVADO (incluyendo /crear)
-    private_commands = [
+    # 1. ELIMINAR el catálogo global por defecto (para que nadie herede comandos no deseados)
+    await bot.delete_my_commands(scope=BotCommandScopeDefault())
+    
+    # 2. ELIMINAR comandos de los GRUPOS (el menú '/' quedará 100% vacío en los grupos)
+    await bot.delete_my_commands(scope=BotCommandScopeAllGroupChats())
+
+    # 3. Comandos VISIBLES para usuarios normales ÚNICAMENTE en chat PRIVADO
+    user_commands = [
         BotCommand(command="start", description="Ver mi perfil y nivel"),
         BotCommand(command="crear", description="Convocar partido público"),
-        BotCommand(command="crear_privado", description="Registrar acta de partido cerrado"),
-        BotCommand(command="sugerir_ubicacion", description="Proponer una nueva pista"),
-        BotCommand(command="panel", description="[Admin] Panel de moderación")
+        BotCommand(command="crear_privado", description="Registrar acta de partido privado"),
+        BotCommand(command="sugerir_ubicacion", description="Proponer una nueva pista")
     ]
-    await bot.set_my_commands(private_commands, scope=BotCommandScopeAllPrivateChats())
+    await bot.set_my_commands(user_commands, scope=BotCommandScopeAllPrivateChats())
 
-    # 2. ELIMINAR comandos de los GRUPOS (el menú del grupo queda 100% limpio)
-    await bot.delete_my_commands(scope=BotCommandScopeAllGroupChats())
+    # 4. Comandos VISIBLES para el ADMINISTRADOR en su chat privado (añade /panel)
+    if config.ADMIN_TELEGRAM_ID:
+        admin_commands = user_commands + [
+            BotCommand(command="panel", description="Panel de moderación de pistas")
+        ]
+        await bot.set_my_commands(
+            admin_commands, 
+            scope=BotCommandScopeChat(chat_id=config.ADMIN_TELEGRAM_ID)
+        )
 
 async def main():
     # Instanciamos el bot con parseo HTML por defecto

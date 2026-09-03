@@ -1,6 +1,6 @@
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.filters.chat_member_updated import ChatMemberUpdatedFilter, JOIN_TRANSITION, LEAVE_TRANSITION
-from aiogram.types import ChatMemberUpdated
+from aiogram.types import ChatMemberUpdated, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 from bot.database.models import GroupChat
 
@@ -25,3 +25,11 @@ async def on_bot_removed_from_group(event: ChatMemberUpdated, session: AsyncSess
     if group:
         group.is_active = False
         await session.commit()
+
+@router.message(F.chat.type.in_({"group", "supergroup"}), F.text.startswith("/"))
+async def auto_delete_group_commands(message: Message):
+    """Elimina cualquier comando escrito manualmente en un grupo para evitar spam."""
+    try:
+        await message.delete()
+    except Exception:
+        pass

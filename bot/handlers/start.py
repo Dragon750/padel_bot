@@ -1,40 +1,43 @@
 from aiogram import Router, F
 from aiogram.filters import CommandStart
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
 from bot.database.models import User
 
 router = Router()
 
-def build_level_keyboard() -> InlineKeyboardMarkup:
-    """Genera un teclado para seleccionar el nivel inicial (0.0 a 6.0)"""
+def build_initial_level_keyboard():
+    """Genera botones desde 0.0 hasta 6.0 en saltos de 0.5."""
     builder = InlineKeyboardBuilder()
-    levels = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0]
+    levels = [round(x * 0.5, 1) for x in range(13)]  # [0.0, 0.5, 1.0, ..., 6.0]
+    
     for lvl in levels:
-        builder.button(text=f"Nivel {lvl}", callback_data=f"setlevel_{lvl}")
-    builder.adjust(3)
+        builder.button(text=f"{lvl:.1f}", callback_data=f"setlevel_{lvl:.1f}")
+        
+    builder.adjust(4)  # 4 botones por fila
     return builder.as_markup()
 
 @router.message(CommandStart(), F.chat.type == "private")
 async def cmd_start(message: Message, session: AsyncSession):
-    """Comprueba si el usuario existe o le pide el nivel inicial."""
-    user_id = message.from_user.id
-    stmt = select(User).where(User.telegram_id == user_id)
-    result = await session.execute(stmt)
-    user = result.scalar_one_or_none()
-
+    user = await session.get(User, message.from_user.id)
+    
     if user:
-        await message.answer(f"¡Hola de nuevo, {user.full_name}! Tu nivel actual es {user.level} 🎾.")
-    else:
         await message.answer(
-            "👋 ¡Bienvenido al Gestor de Pádel!\n\n"
-            "Para empezar, selecciona tu nivel orientativo (0.0 a 6.0). "
-            "Este nivel se ajustará automáticamente según tus resultados:",
-            reply_markup=build_level_keyboard()
+            f"👋 ¡Hola de nuevo, <b>{user.full_name}</b>!\n\n"
+            f"📊 <b>Tu nivel actual:</b> {user.level:.2f}\n"
+            f"🎾 <b>Partidos jugados:</b> {user.matches_played}\n"
+            f"⚠️ <b>Cancelaciones tardías:</b> {user.late_cancellations}\n\n"
+            f"Usa /crear para convocar un partido público o /crear_privado para registrar uno cerrado."
         )
+        return
+
+    await message.answer(
+        f"👋 ¡Bienvenido al Bot de Pádel, <b>{message.from_user.full_name}</b>!\n\n"
+        "Para poder inscribirte y organizar partidos, selecciona tu <b>nivel inicial orientativo</b> (escala 0.0 a 6.0):",
+        reply_markup=build_initial_level_keyboard()
+    )
 
 @router.callback_query(F.data.startswith("setlevel_"))
 async def process_initial_level(callback: CallbackQuery, session: AsyncSession):
@@ -51,9 +54,11 @@ async def process_initial_level(callback: CallbackQuery, session: AsyncSession):
         session.add(user)
     else:
         user.level = level_val
-        
+
     await session.commit()
     await callback.message.edit_text(
-        f"✅ ¡Perfil completado!\nTu nivel inicial ha sido fijado en <b>{level_val:.1f}</b>."
+        f"✅ ¡Perfil completado!\n\n"
+        f"Tu nivel inicial ha sido fijado en <b>{level_val:.1f}</b>.\n\n"
+        f"Ya puedes usar /crear para organizar convocatorias en tus grupos."
     )
     await callback.answer()
