@@ -132,16 +132,15 @@ async def process_private_minute(callback: CallbackQuery, state: FSMContext):
 async def process_p1_partner(message: Message, state: FSMContext, session: AsyncSession):
     player = await resolve_player(message.text, session)
     if not player:
-        await message.answer("⛔ <b>Usuario no registrado.</b>\nDebes escribir un @username válido (ej. <code>@usuario</code>) y debe haber iniciado el bot previamente con /start:")
+        await message.answer("⛔ <b>Usuario no registrado.</b> Debes escribir un @username válido que haya iniciado el bot con /start:")
         return
     if player.telegram_id == message.from_user.id:
         await message.answer("⛔ No puedes seleccionarte a ti mismo como compañero. Introduce otro @username:")
         return
-
+        
     await state.update_data(p1_partner=player)
     await state.set_state(PrivateMatchFSM.waiting_for_p2_player1)
     await message.answer("Escribe el <b>Jugador 1 de la Pareja 2 (Rival)</b> usando su @username:")
-
 
 @router.message(PrivateMatchFSM.waiting_for_p2_player1)
 async def process_p2_player1(message: Message, state: FSMContext, session: AsyncSession):
@@ -149,16 +148,15 @@ async def process_p2_player1(message: Message, state: FSMContext, session: Async
     data = await state.get_data()
     
     if not player:
-        await message.answer("⛔ <b>Usuario no registrado.</b> Introduce su @username (debe haber iniciado el bot con /start):")
+        await message.answer("⛔ <b>Usuario no registrado.</b> Introduce su @username:")
         return
     if player.telegram_id in [message.from_user.id, data["p1_partner"].telegram_id]:
-        await message.answer("⛔ Este jugador ya forma parte de la Pareja 1. Introduce otro @username:")
+        await message.answer("⛔ Este jugador ya está en la Pareja 1. Introduce otro @username:")
         return
-
+        
     await state.update_data(p2_player1=player)
     await state.set_state(PrivateMatchFSM.waiting_for_p2_player2)
     await message.answer("Por último, escribe el <b>Jugador 2 de la Pareja 2</b> usando su @username:")
-
 
 @router.message(PrivateMatchFSM.waiting_for_p2_player2)
 async def process_p2_player2(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
@@ -166,7 +164,7 @@ async def process_p2_player2(message: Message, state: FSMContext, session: Async
     data = await state.get_data()
 
     if not player:
-        await message.answer("⛔ <b>Usuario no registrado.</b> Introduce su @username (debe haber iniciado el bot con /start):")
+        await message.answer("⛔ <b>Usuario no registrado.</b> Introduce su @username:")
         return
     if player.telegram_id in [message.from_user.id, data["p1_partner"].telegram_id, data["p2_player1"].telegram_id]:
         await message.answer("⛔ Este jugador ya está añadido en este partido. Introduce otro @username:")
@@ -174,7 +172,7 @@ async def process_p2_player2(message: Message, state: FSMContext, session: Async
 
     await state.update_data(p2_player2=player)
     data["p2_player2"] = player
-
+    
     match_dt = data["datetime"]
     if match_dt < datetime.now():
         await state.set_state(PrivateMatchFSM.waiting_for_score)
