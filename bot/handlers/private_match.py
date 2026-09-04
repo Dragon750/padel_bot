@@ -55,6 +55,14 @@ def build_private_minutes_keyboard(hour: int) -> InlineKeyboardMarkup:
     builder.adjust(2)
     return builder.as_markup()
 
+def build_private_summary_keyboard() -> InlineKeyboardMarkup:
+    """Botonera de confirmación final para el partido privado."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🚀 Confirmar y Registrar", callback_data="confirm_private_match")
+    builder.button(text="❌ Cancelar Creación", callback_data="cancel_private_match")
+    builder.adjust(1)
+    return builder.as_markup()
+
 # ==========================================
 # 2. FUNCIONES AUXILIARES
 # ==========================================
@@ -181,7 +189,7 @@ async def process_p2_player2(message: Message, state: FSMContext, session: Async
             "Introduce el resultado final por sets (ej. <code>6-4 3-6 7-6</code>):"
         )
     else:
-        await finalize_private_match(message, state, session, bot, is_past=False)
+        await show_private_summary(message, state, session, is_past=False)
 
 # ==========================================
 # 7. MARCADOR INMEDIATO Y CIERRE
@@ -190,12 +198,65 @@ async def process_p2_player2(message: Message, state: FSMContext, session: Async
 async def process_immediate_score(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
     score = message.text.strip()
     await state.update_data(score=score)
-    await finalize_private_match(message, state, session, bot, is_past=True)
+    await show_private_summary(message, state, session, is_past=True)
 
-
-async def finalize_private_match(message: Message, state: FSMContext, session: AsyncSession, bot: Bot, is_past: bool):
+# ---------- AÑADE ESTE BLOQUE COMPLETO AQUÍ ----------
+async def show_private_summary(message: Message, state: FSMContext, session: AsyncSession, is_past: bool):
+    """Muestra la tarjeta de resumen del partido privado con botones de confirmación o cancelación."""
+    await state.update_data(is_past=is_past)
     data = await state.get_data()
-    user_id = message.from_user.id
+    
+    match_dt: datetime = data["datetime"]
+    p1_partner = data["p1_partner"]
+    p2_p1 = data["p2_player1"]
+    p2_p2 = data["p2_player2"]
+    
+    creator_name = f"@{message.from_user.username}" if message.from_user.username else message.from_user.full_name
+    p1_partner_name = f"@{p1_partner.username}" if p1_partner.username else p1_partner.full_name
+    p2_p1_name = f"@{p2_p1.username}" if p2_p1.username else p2_p1.full_name
+    p2_p2_name = f"@{p2_p2.username}" if p2_p2.username else p2_p2.full_name
+    
+    tipo_str = "🔙 Partido ya jugado (Validación de acta)" if is_past else "📅 Partido agendado (Futuro)"
+    score_line = f"📊 <b>Marcador:</b> {data.get('score')}\n" if is_past else ""
+    
+    text = (
+        f"📋 <b>RESUMEN DEL PARTIDO PRIVADO</b>\n\n"
+        f"📌 <b>Tipo:</b> {tipo_str}\n"
+        f"📅 <b>Fecha y Hora:</b> {match_dt.strftime('%d/%m/%Y %H:%M')}\n"
+        f"{score_line}\n"
+        f"👥 <b>Pareja 1:</b>\n"
+        f"  1. 👤 {creator_name} ⭐️\n"
+        f"  2. 👤 {p1_partner_name}\n\n"
+        f"👥 <b>Pareja 2:</b>\n"
+        f"  1. 👤 {p2_p1_name}\n"
+        f"  2. 👤 {p2_p2_name}\n\n"
+        f"<i>Comprueba los datos. Pulsa para registrar el partido o cancelarlo.</i>"
+    )
+    
+    await state.set_state(PrivateMatchFSM.confirming_summary)
+    await message.answer(text, reply_markup=build_private_summary_keyboard())
+
+
+@router.callback_query(PrivateMatchFSM.confirming_summary, F.data == "confirm_private_match")
+async def process_confirm_private_match(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
+    """El usuario confirma: se guarda en base de datos."""
+    data = await state.get_data()
+    is_past = data.get("is_past", False)
+    await finalize_private_match(callback, state, session, bot, is_past=is_past)
+    await callback.answer()
+
+
+@router.callback_query(PrivateMatchFSM.confirming_summary, F.data == "cancel_private_match")
+async def process_cancel_private_match(callback: CallbackQuery, state: FSMContext):
+    """El usuario cancela: se descarta la FSM sin tocar la base de datos."""
+    await state.clear()
+    await callback.message.edit_text("❌ <b>Creación cancelada.</b> El partido no se ha guardado en el sistema.")
+    await callback.answer()
+
+async def finalize_private_match(callback: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot, is_past: bool):
+    """Guarda el partido privado en BBDD y lanza el consenso si ya se jugó."""
+    data = await state.get_data()
+    user_id = callback.from_user.id
 
     new_match = Match(
         manager_id=user_id,
@@ -218,7 +279,8 @@ async def finalize_private_match(message: Message, state: FSMContext, session: A
     await state.clear()
 
     if is_past:
-        await message.answer("✅ Partido registrado. Solicitando confirmación a los participantes...")
+        await callback.message.edit_text("✅ <b>Partido registrado con éxito.</b> Solicitando confirmación a los demás participantes...")
+        
         for p in [data["p1_partner"], data["p2_player1"], data["p2_player2"]]:
             try:
                 await bot.send_message(
@@ -231,4 +293,4 @@ async def finalize_private_match(message: Message, state: FSMContext, session: A
             except Exception:
                 pass
     else:
-        await message.answer("✅ Partido privado agendado con éxito entre los 4 jugadores.")
+        await callback.message.edit_text("✅ <b>Partido privado agendado con éxito.</b> Se te avisará 2.5 horas después del inicio para introducir el resultado.")

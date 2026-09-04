@@ -14,3 +14,5 @@ class PrivateMatchFSM(StatesGroup):
     
     # Exclusivo para partidos del pasado (< 24h)
     waiting_for_score = State()
+    
+    confirming_summary = State()
