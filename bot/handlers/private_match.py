@@ -17,7 +17,7 @@ router = Router()
 # 1. TECLADOS ESPECÍFICOS PARA PARTIDOS PRIVADOS
 # ==========================================
 def build_private_dates_keyboard() -> InlineKeyboardMarkup:
-    """Genera fechas desde AYER (-1 día) hasta +5 días vista."""
+    """Genera fechas desde AYER (-1 día) hasta +5 días vista con botón de cancelar."""
     builder = InlineKeyboardBuilder()
     today = datetime.now().date()
     
@@ -35,28 +35,60 @@ def build_private_dates_keyboard() -> InlineKeyboardMarkup:
             
         builder.button(text=label, callback_data=f"privdate_{date_obj.strftime('%Y-%m-%d')}")
         
-    builder.adjust(2)
+    builder.button(text="❌ Cancelar Creación", callback_data="cancel_private_match")
+    builder.adjust(2, 2, 2, 1, 1)
     return builder.as_markup()
 
 def build_private_hours_keyboard() -> InlineKeyboardMarkup:
-    """Genera horas completas sin filtrar (permite horas pasadas para registrar actas)."""
+    """Genera horas con botones para volver a fecha o cancelar."""
     builder = InlineKeyboardBuilder()
     for h in range(7, 23):
         builder.button(text=f"{h:02d}h", callback_data=f"privhour_{h}")
-    builder.adjust(4)
+    builder.button(text="🔙 Volver a Fecha", callback_data="back_to_priv_date")
+    builder.button(text="❌ Cancelar", callback_data="cancel_private_match")
+    builder.adjust(4, 4, 4, 4, 2)
     return builder.as_markup()
 
 def build_private_minutes_keyboard(hour: int) -> InlineKeyboardMarkup:
-    """Genera minutos sin filtrar."""
+    """Genera minutos con botones para volver a horas o cancelar."""
     builder = InlineKeyboardBuilder()
     for m in [0, 15, 30, 45]:
         time_str = f"{hour:02d}:{m:02d}"
         builder.button(text=time_str, callback_data=f"privtime_{time_str}")
+    builder.button(text="🔙 Volver a Horas", callback_data="back_to_priv_hours")
+    builder.button(text="❌ Cancelar", callback_data="cancel_private_match")
+    builder.adjust(2, 2, 2)
+    return builder.as_markup()
+
+def build_back_to_minutes_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔙 Volver a Minutos", callback_data="back_to_priv_minutes")
+    builder.button(text="❌ Cancelar", callback_data="cancel_private_match")
+    builder.adjust(2)
+    return builder.as_markup()
+
+def build_back_to_p1_partner_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔙 Volver a Compañero", callback_data="back_to_priv_p1_partner")
+    builder.button(text="❌ Cancelar", callback_data="cancel_private_match")
+    builder.adjust(2)
+    return builder.as_markup()
+
+def build_back_to_p2_player1_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔙 Volver a Rival 1", callback_data="back_to_priv_p2_player1")
+    builder.button(text="❌ Cancelar", callback_data="cancel_private_match")
+    builder.adjust(2)
+    return builder.as_markup()
+
+def build_back_to_p2_player2_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔙 Volver a Rival 2", callback_data="back_to_priv_p2_player2")
+    builder.button(text="❌ Cancelar", callback_data="cancel_private_match")
     builder.adjust(2)
     return builder.as_markup()
 
 def build_private_summary_keyboard() -> InlineKeyboardMarkup:
-    """Botonera de confirmación final para el partido privado."""
     builder = InlineKeyboardBuilder()
     builder.button(text="🚀 Confirmar y Registrar", callback_data="confirm_private_match")
     builder.button(text="❌ Cancelar Creación", callback_data="cancel_private_match")
@@ -129,7 +161,8 @@ async def process_private_minute(callback: CallbackQuery, state: FSMContext):
         "👥 <b>ASIGNACIÓN DE JUGADORES</b>\n\n"
         "Tú eres el Jugador 1 de la Pareja 1.\n"
         "Escribe tu <b>compañero (Pareja 1)</b> usando su <b>@username</b>:\n"
-        "<i>(Debe haber iniciado el bot previamente con /start)</i>"
+        "<i>(Debe haber iniciado el bot previamente con /start)</i>",
+        reply_markup=build_back_to_minutes_keyboard()
     )
     await callback.answer()
 
@@ -140,15 +173,24 @@ async def process_private_minute(callback: CallbackQuery, state: FSMContext):
 async def process_p1_partner(message: Message, state: FSMContext, session: AsyncSession):
     player = await resolve_player(message.text, session)
     if not player:
-        await message.answer("⛔ <b>Usuario no registrado.</b> Debes escribir un @username válido que haya iniciado el bot con /start:")
+        await message.answer(
+            "⛔ <b>Usuario no registrado.</b> Debes escribir un @username válido que haya iniciado el bot con /start:",
+            reply_markup=build_back_to_minutes_keyboard()
+        )
         return
     if player.telegram_id == message.from_user.id:
-        await message.answer("⛔ No puedes seleccionarte a ti mismo como compañero. Introduce otro @username:")
+        await message.answer(
+            "⛔ No puedes seleccionarte a ti mismo como compañero. Introduce otro @username:",
+            reply_markup=build_back_to_minutes_keyboard()
+        )
         return
         
     await state.update_data(p1_partner=player)
     await state.set_state(PrivateMatchFSM.waiting_for_p2_player1)
-    await message.answer("Escribe el <b>Jugador 1 de la Pareja 2 (Rival)</b> usando su @username:")
+    await message.answer(
+        "Escribe el <b>Jugador 1 de la Pareja 2 (Rival)</b> usando su @username:",
+        reply_markup=build_back_to_p1_partner_keyboard()
+    )
 
 @router.message(PrivateMatchFSM.waiting_for_p2_player1)
 async def process_p2_player1(message: Message, state: FSMContext, session: AsyncSession):
@@ -156,15 +198,24 @@ async def process_p2_player1(message: Message, state: FSMContext, session: Async
     data = await state.get_data()
     
     if not player:
-        await message.answer("⛔ <b>Usuario no registrado.</b> Introduce su @username:")
+        await message.answer(
+            "⛔ <b>Usuario no registrado.</b> Introduce su @username:",
+            reply_markup=build_back_to_p1_partner_keyboard()
+        )
         return
     if player.telegram_id in [message.from_user.id, data["p1_partner"].telegram_id]:
-        await message.answer("⛔ Este jugador ya está en la Pareja 1. Introduce otro @username:")
+        await message.answer(
+            "⛔ Este jugador ya está en la Pareja 1. Introduce otro @username:",
+            reply_markup=build_back_to_p1_partner_keyboard()
+        )
         return
         
     await state.update_data(p2_player1=player)
     await state.set_state(PrivateMatchFSM.waiting_for_p2_player2)
-    await message.answer("Por último, escribe el <b>Jugador 2 de la Pareja 2</b> usando su @username:")
+    await message.answer(
+        "Por último, escribe el <b>Jugador 2 de la Pareja 2</b> usando su @username:",
+        reply_markup=build_back_to_p2_player1_keyboard()
+    )
 
 @router.message(PrivateMatchFSM.waiting_for_p2_player2)
 async def process_p2_player2(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
@@ -172,21 +223,31 @@ async def process_p2_player2(message: Message, state: FSMContext, session: Async
     data = await state.get_data()
 
     if not player:
-        await message.answer("⛔ <b>Usuario no registrado.</b> Introduce su @username:")
+        await message.answer(
+            "⛔ <b>Usuario no registrado.</b> Introduce su @username:",
+            reply_markup=build_back_to_p2_player1_keyboard()
+        )
         return
     if player.telegram_id in [message.from_user.id, data["p1_partner"].telegram_id, data["p2_player1"].telegram_id]:
-        await message.answer("⛔ Este jugador ya está añadido en este partido. Introduce otro @username:")
+        await message.answer(
+            "⛔ Este jugador ya está añadido en este partido. Introduce otro @username:",
+            reply_markup=build_back_to_p2_player1_keyboard()
+        )
         return
 
     await state.update_data(p2_player2=player)
     data["p2_player2"] = player
     
     match_dt = data["datetime"]
-    if match_dt < datetime.now():
+    now = datetime.now()
+    
+    if match_dt < now:
         await state.set_state(PrivateMatchFSM.waiting_for_score)
         await message.answer(
             "🎾 <b>PARTIDO YA DISPUTADO DETECTADO</b>\n\n"
-            "Introduce el resultado final por sets (ej. <code>6-4 3-6 7-6</code>):"
+            "Como la fecha es anterior a este momento, por favor introduce el resultado final "
+            "por sets (ej. <code>6-4 3-6 7-6</code>):",
+            reply_markup=build_back_to_p2_player2_keyboard()
         )
     else:
         await show_private_summary(message, state, session, is_past=False)
@@ -200,7 +261,79 @@ async def process_immediate_score(message: Message, state: FSMContext, session: 
     await state.update_data(score=score)
     await show_private_summary(message, state, session, is_past=True)
 
-# ---------- AÑADE ESTE BLOQUE COMPLETO AQUÍ ----------
+@router.callback_query(F.data == "cancel_private_match")
+async def process_cancel_private_match(callback: CallbackQuery, state: FSMContext):
+    """Cancela la creación del partido privado en cualquier fase."""
+    await state.clear()
+    await callback.message.edit_text("❌ <b>Creación cancelada.</b> El partido no se ha registrado en el sistema.")
+    await callback.answer()
+
+@router.callback_query(F.data == "back_to_priv_date")
+async def nav_back_to_priv_date(callback: CallbackQuery, state: FSMContext):
+    """Vuelve de Selección de Hora a Selección de Fecha."""
+    await state.set_state(PrivateMatchFSM.waiting_for_date)
+    await callback.message.edit_text(
+        "🤫 <b>NUEVO PARTIDO PRIVADO</b>\n\n"
+        "Este partido no se publicará en los grupos. Sirve para actualizar estadísticas y nivel.\n"
+        "📅 <b>¿Qué día se jugó o se va a jugar?</b>",
+        reply_markup=build_private_dates_keyboard()
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "back_to_priv_hours")
+async def nav_back_to_priv_hours(callback: CallbackQuery, state: FSMContext):
+    """Vuelve de Minutos a Selección de Hora."""
+    await state.set_state(PrivateMatchFSM.waiting_for_hour)
+    await callback.message.edit_text("⏰ Selecciona la hora:", reply_markup=build_private_hours_keyboard())
+    await callback.answer()
+
+@router.callback_query(F.data == "back_to_priv_minutes")
+async def nav_back_to_priv_minutes(callback: CallbackQuery, state: FSMContext):
+    """Vuelve de Compañero a Selección de Minutos."""
+    data = await state.get_data()
+    hour = data.get("hour")
+    if hour is None:
+        await state.clear()
+        await callback.message.edit_text("⏳ La sesión ha expirado. Usa /crear_privado para empezar de nuevo.")
+        await callback.answer()
+        return
+    await state.set_state(PrivateMatchFSM.waiting_for_minute)
+    await callback.message.edit_text(f"⏰ {hour:02d}h... ¿y los minutos?", reply_markup=build_private_minutes_keyboard(hour))
+    await callback.answer()
+
+@router.callback_query(F.data == "back_to_priv_p1_partner")
+async def nav_back_to_priv_p1_partner(callback: CallbackQuery, state: FSMContext):
+    """Vuelve de Rival 1 a Compañero."""
+    await state.set_state(PrivateMatchFSM.waiting_for_p1_partner)
+    await callback.message.edit_text(
+        "👥 <b>ASIGNACIÓN DE JUGADORES</b>\n\n"
+        "Tú eres el Jugador 1 de la Pareja 1.\n"
+        "Escribe tu <b>compañero (Pareja 1)</b> usando su <b>@username</b>:\n"
+        "<i>(Debe haber iniciado el bot previamente con /start)</i>",
+        reply_markup=build_back_to_minutes_keyboard()
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "back_to_priv_p2_player1")
+async def nav_back_to_priv_p2_player1(callback: CallbackQuery, state: FSMContext):
+    """Vuelve de Rival 2 a Rival 1."""
+    await state.set_state(PrivateMatchFSM.waiting_for_p2_player1)
+    await callback.message.edit_text(
+        "Escribe el <b>Jugador 1 de la Pareja 2 (Rival)</b> usando su @username:",
+        reply_markup=build_back_to_p1_partner_keyboard()
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "back_to_priv_p2_player2")
+async def nav_back_to_priv_p2_player2(callback: CallbackQuery, state: FSMContext):
+    """Vuelve de Marcador a Rival 2."""
+    await state.set_state(PrivateMatchFSM.waiting_for_p2_player2)
+    await callback.message.edit_text(
+        "Por último, escribe el <b>Jugador 2 de la Pareja 2</b> usando su @username:",
+        reply_markup=build_back_to_p2_player1_keyboard()
+    )
+    await callback.answer()
+
 async def show_private_summary(message: Message, state: FSMContext, session: AsyncSession, is_past: bool):
     """Muestra la tarjeta de resumen del partido privado con botones de confirmación o cancelación."""
     await state.update_data(is_past=is_past)
