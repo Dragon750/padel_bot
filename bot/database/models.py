@@ -19,7 +19,6 @@ class User(Base):
     username: Mapped[str | None] = mapped_column(String(64), nullable=True)
     full_name: Mapped[str] = mapped_column(String(128))
     level: Mapped[float] = mapped_column(Float, default=2.5)  # Rango 0.0 a 6.0
-    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     matches_played: Mapped[int] = mapped_column(Integer, default=0)
     late_cancellations: Mapped[int] = mapped_column(Integer, default=0)
 

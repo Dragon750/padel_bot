@@ -120,8 +120,8 @@ async def process_private_minute(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         "👥 <b>ASIGNACIÓN DE JUGADORES</b>\n\n"
         "Tú eres el Jugador 1 de la Pareja 1.\n"
-        "Escribe tu <b>compañero (Pareja 1)</b>.\n"
-        "<i>(Usa su @username si está registrado, o su nombre si es externo)</i>:"
+        "Escribe tu <b>compañero (Pareja 1)</b> usando su <b>@username</b>:\n"
+        "<i>(Debe haber iniciado el bot previamente con /start)</i>"
     )
     await callback.answer()
 
