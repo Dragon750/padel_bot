@@ -28,6 +28,7 @@ async def check_cancellations(bot: Bot):
             players_count = await session.scalar(stmt_players)
             
             if not match.is_court_booked or players_count < 4:
+                match.status = "CANCELLED"
                 manager_id = match.manager_id
                 match_id = match.id
                 chat_id = match.chat_id

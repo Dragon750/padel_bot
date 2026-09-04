@@ -1,5 +1,5 @@
 import datetime as dt
-from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, Integer, String, DateTime
+from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, Integer, String, DateTime, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 from bot.database.base import Base
@@ -65,20 +65,18 @@ class Match(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, server_default=func.now())
 
 class MatchPlayer(Base):
-    """Participantes de un partido (Usuarios registrados o invitados externos)"""
     __tablename__ = "match_players"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    match_id: Mapped[int] = mapped_column(Integer, ForeignKey("matches.id", ondelete="CASCADE"))
-    
-    # Identificación y propiedad de plaza
-    user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.telegram_id"), nullable=True)
-    guest_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    registered_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.telegram_id"), nullable=True)
-    
-    team: Mapped[int] = mapped_column(Integer)  # 1 (Pareja 1) o 2 (Pareja 2)
+    match_id: Mapped[int] = mapped_column(Integer, ForeignKey("matches.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.telegram_id"), nullable=False)
+    team: Mapped[int] = mapped_column(Integer, nullable=False)  # 1 o 2
     has_confirmed_result: Mapped[bool] = mapped_column(Boolean, default=False)
-    joined_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    joined_at: Mapped[dt.datetime] = mapped_column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("match_id", "user_id", name="uq_match_user"),
+    )
 
 
 class MatchWaitlist(Base):

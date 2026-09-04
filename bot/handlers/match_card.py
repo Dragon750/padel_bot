@@ -17,21 +17,22 @@ logger = logging.getLogger(__name__)
 # FUNCIÓN DIBUJANTE: Reconstruye la tarjeta
 # ==========================================
 async def render_match_card(match_id: int, session: AsyncSession) -> tuple[str, str | None, bool]:
-    """Genera el texto actualizado de la tarjeta y devuelve parámetros para el teclado."""
-    
     match = await session.get(Match, match_id)
     loc = await session.get(Location, match.location_id)
     
-    stmt = select(MatchPlayer, User).join(User).where(MatchPlayer.match_id == match_id).order_by(asc(MatchPlayer.joined_at))
+    stmt = (
+        select(MatchPlayer, User)
+        .join(User, MatchPlayer.user_id == User.telegram_id)
+        .where(MatchPlayer.match_id == match_id)
+        .order_by(asc(MatchPlayer.joined_at))
+    )
     result = await session.execute(stmt)
     players_data = result.all()
     
     team_1, team_2 = [], []
     for mp, user in players_data:
-        # 1. Privilegiar el @username, si no lo tiene, usamos el nombre completo
         player_name = f"@{user.username}" if user.username else user.full_name
         
-        # 2. Añadir la estrella si es el gestor
         if user.telegram_id == match.manager_id:
             player_name += " ⭐️"
             

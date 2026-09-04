@@ -58,18 +58,14 @@ def build_private_minutes_keyboard(hour: int) -> InlineKeyboardMarkup:
 # ==========================================
 # 2. FUNCIONES AUXILIARES
 # ==========================================
-async def resolve_player(text: str, session: AsyncSession) -> User | str | None:
-    """
-    Busca al usuario si empieza por '@'. 
-    Devuelve objeto User si lo encuentra, string si es externo, o None si hay error.
-    """
+async def resolve_player(text: str, session: AsyncSession) -> User | None:
+    """Busca al usuario por @username en la base de datos. Solo admite usuarios registrados."""
     text = text.strip()
-    if text.startswith("@"):
-        username = text[1:].strip()
-        stmt = select(User).where(User.username.ilike(username))
-        user = (await session.execute(stmt)).scalar_one_or_none()
-        return user if user else None # None significa que introdujo un @ incorrecto
-    return text # Es un invitado externo
+    if not text.startswith("@"):
+        return None
+    username = text[1:].strip()
+    stmt = select(User).where(User.username.ilike(username))
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 # ==========================================
@@ -135,60 +131,56 @@ async def process_private_minute(callback: CallbackQuery, state: FSMContext):
 @router.message(PrivateMatchFSM.waiting_for_p1_partner)
 async def process_p1_partner(message: Message, state: FSMContext, session: AsyncSession):
     player = await resolve_player(message.text, session)
-    if player is None:
-        await message.answer("⛔ El @username indicado no está registrado en el bot. Vuelve a escribirlo (o introduce un nombre sin @ si es externo):")
+    if not player:
+        await message.answer("⛔ <b>Usuario no registrado.</b>\nDebes escribir un @username válido (ej. <code>@usuario</code>) y debe haber iniciado el bot previamente con /start:")
         return
-        
-    # Guardamos el objeto User o el string
+    if player.telegram_id == message.from_user.id:
+        await message.answer("⛔ No puedes seleccionarte a ti mismo como compañero. Introduce otro @username:")
+        return
+
     await state.update_data(p1_partner=player)
     await state.set_state(PrivateMatchFSM.waiting_for_p2_player1)
-    await message.answer("Escribe el <b>Jugador 1 de la Pareja 2 (Rival)</b>:")
+    await message.answer("Escribe el <b>Jugador 1 de la Pareja 2 (Rival)</b> usando su @username:")
 
 
 @router.message(PrivateMatchFSM.waiting_for_p2_player1)
 async def process_p2_player1(message: Message, state: FSMContext, session: AsyncSession):
     player = await resolve_player(message.text, session)
-    if player is None:
-        await message.answer("⛔ El @username indicado no está registrado. Vuelve a intentarlo:")
+    data = await state.get_data()
+    
+    if not player:
+        await message.answer("⛔ <b>Usuario no registrado.</b> Introduce su @username (debe haber iniciado el bot con /start):")
         return
-        
+    if player.telegram_id in [message.from_user.id, data["p1_partner"].telegram_id]:
+        await message.answer("⛔ Este jugador ya forma parte de la Pareja 1. Introduce otro @username:")
+        return
+
     await state.update_data(p2_player1=player)
     await state.set_state(PrivateMatchFSM.waiting_for_p2_player2)
-    await message.answer("Por último, escribe el <b>Jugador 2 de la Pareja 2</b>:")
+    await message.answer("Por último, escribe el <b>Jugador 2 de la Pareja 2</b> usando su @username:")
 
 
 @router.message(PrivateMatchFSM.waiting_for_p2_player2)
 async def process_p2_player2(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
     player = await resolve_player(message.text, session)
-    if player is None:
-        await message.answer("⛔ El @username indicado no está registrado. Vuelve a intentarlo:")
-        return
-
     data = await state.get_data()
-    p2_player1 = data["p2_player1"]
-    
-    # REGLA ESTRICTA: Mínimo 1 registrado en Pareja 2[cite: 1, 4]
-    if not isinstance(p2_player1, User) and not isinstance(player, User):
-        await message.answer(
-            "⛔ <b>Validación fallida:</b>\n"
-            "Para garantizar la validez del resultado, debe haber al menos un jugador con cuenta de Telegram en la Pareja 2.\n\n"
-            "Vuelve a introducir el <b>Jugador 2 de la Pareja 2</b> usando su @username:"
-        )
+
+    if not player:
+        await message.answer("⛔ <b>Usuario no registrado.</b> Introduce su @username (debe haber iniciado el bot con /start):")
+        return
+    if player.telegram_id in [message.from_user.id, data["p1_partner"].telegram_id, data["p2_player1"].telegram_id]:
+        await message.answer("⛔ Este jugador ya está añadido en este partido. Introduce otro @username:")
         return
 
     await state.update_data(p2_player2=player)
-    data["p2_player2"] = player  # Actualizamos el diccionario local
-    
-    # 6. BIFURCACIÓN TEMPORAL (Pasado vs Futuro)[cite: 4]
+    data["p2_player2"] = player
+
     match_dt = data["datetime"]
-    now = datetime.now()
-    
-    if match_dt < now:
+    if match_dt < datetime.now():
         await state.set_state(PrivateMatchFSM.waiting_for_score)
         await message.answer(
             "🎾 <b>PARTIDO YA DISPUTADO DETECTADO</b>\n\n"
-            "Como la fecha es anterior a este momento, por favor introduce el resultado final "
-            "por sets (ej. <code>6-4 3-6 7-6</code>):"
+            "Introduce el resultado final por sets (ej. <code>6-4 3-6 7-6</code>):"
         )
     else:
         await finalize_private_match(message, state, session, bot, is_past=False)
@@ -204,59 +196,41 @@ async def process_immediate_score(message: Message, state: FSMContext, session: 
 
 
 async def finalize_private_match(message: Message, state: FSMContext, session: AsyncSession, bot: Bot, is_past: bool):
-    """Guarda el partido privado en BBDD y lanza el consenso si ya se jugó."""
     data = await state.get_data()
     user_id = message.from_user.id
-    
-    # 1. Crear el partido
+
     new_match = Match(
         manager_id=user_id,
         datetime=data["datetime"],
         is_private=True,
-        is_court_booked=True, # Se presupone
+        is_court_booked=True,
         status="VALIDATING" if is_past else "FULL",
         result=data.get("score")
     )
     session.add(new_match)
     await session.flush()
 
-    # 2. Registrar Pareja 1
-    # Titular
+    # Inscribir a los 4 usuarios registrados directamente
     session.add(MatchPlayer(match_id=new_match.id, user_id=user_id, team=1))
-    
-    # Compañero P1
-    p1_part = data["p1_partner"]
-    if isinstance(p1_part, User):
-        session.add(MatchPlayer(match_id=new_match.id, user_id=p1_part.telegram_id, team=1))
-    else:
-        session.add(MatchPlayer(match_id=new_match.id, guest_name=p1_part, registered_by=user_id, team=1))
-
-    # 3. Registrar Pareja 2
-    for p2_player in [data["p2_player1"], data["p2_player2"]]:
-        if isinstance(p2_player, User):
-            session.add(MatchPlayer(match_id=new_match.id, user_id=p2_player.telegram_id, team=2))
-        else:
-            session.add(MatchPlayer(match_id=new_match.id, guest_name=p2_player, registered_by=user_id, team=2))
+    session.add(MatchPlayer(match_id=new_match.id, user_id=data["p1_partner"].telegram_id, team=1))
+    session.add(MatchPlayer(match_id=new_match.id, user_id=data["p2_player1"].telegram_id, team=2))
+    session.add(MatchPlayer(match_id=new_match.id, user_id=data["p2_player2"].telegram_id, team=2))
 
     await session.commit()
     await state.clear()
 
     if is_past:
-        await message.answer("✅ Partido pasado registrado. Solicitando confirmación a la pareja rival...")
-        
-        # Enviar consenso a los registrados de la Pareja 2[cite: 1, 4]
-        for p2_player in [data["p2_player1"], data["p2_player2"]]:
-            if isinstance(p2_player, User):
-                try:
-                    await bot.send_message(
-                        p2_player.telegram_id,
-                        f"📋 <b>VALIDACIÓN DE PARTIDO PRIVADO</b>\n\n"
-                        f"Se ha registrado un partido donde participaste.\n"
-                        f"<b>Marcador indicado:</b> {data['score']}\n\n"
-                        f"¿Confirmas que el resultado es correcto?",
-                        reply_markup=score_consensus_kb(new_match.id)
-                    )
-                except Exception:
-                    pass # Evitar crash si el rival tiene bloqueado al bot
+        await message.answer("✅ Partido registrado. Solicitando confirmación a los participantes...")
+        for p in [data["p1_partner"], data["p2_player1"], data["p2_player2"]]:
+            try:
+                await bot.send_message(
+                    p.telegram_id,
+                    f"📋 <b>VALIDACIÓN DE PARTIDO PRIVADO #{new_match.id}</b>\n\n"
+                    f"Marcador registrado: <b>{data['score']}</b>\n\n"
+                    f"¿Confirmas el resultado?",
+                    reply_markup=score_consensus_kb(new_match.id)
+                )
+            except Exception:
+                pass
     else:
-        await message.answer("✅ Partido privado agendado con éxito. Se te avisará 2.5 horas después del inicio para introducir el resultado.")
+        await message.answer("✅ Partido privado agendado con éxito entre los 4 jugadores.")
