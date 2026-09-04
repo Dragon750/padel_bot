@@ -70,7 +70,7 @@ async def cmd_report_score(message: Message, session: AsyncSession, bot: Bot):
 
     # 3. Notificar a los rivales
     for p in players:
-        if p.user_id and p.user_id != message.from_user.id:
+        if p.user_id != message.from_user.id:
             try:
                 await bot.send_message(
                     chat_id=p.user_id,
@@ -142,7 +142,7 @@ async def finalize_match_closure(match_id: int, session: AsyncSession, bot: Bot)
         if g1 > g2: t1_sets += 1
         elif g2 > g1: t2_sets += 1
 
-    stmt = select(MatchPlayer, User).join(User).where(MatchPlayer.match_id == match_id)
+    stmt = select(MatchPlayer, User).join(User, MatchPlayer.user_id == User.telegram_id).where(MatchPlayer.match_id == match_id)
     players_data = (await session.execute(stmt)).all()
 
     t1, t2 = [], []

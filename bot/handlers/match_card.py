@@ -173,6 +173,14 @@ async def handle_leave(callback: CallbackQuery, session: AsyncSession, bot: Bot)
         await callback.answer("👋 Te has salido del partido correctamente.")
     # ------------------------------------------
     
+    await session.delete(player)
+    
+    # Si el partido estaba FULL, ahora vuelve a estar OPEN
+    if match.status == "FULL":
+        match.status = "OPEN"
+        
+    await session.flush()
+    
     # ¿Era el organizador? Traspasamos el liderazgo o eliminamos la convocatoria
     match_deleted = False
     if match.manager_id == user_id:
